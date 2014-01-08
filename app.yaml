@@ -23,10 +23,9 @@ handlers:
   expiration: '0'
 
 - url: /.*
-  script: djangae.wsgi.main
+  script: testapp.wsgi.application
 
-skip_files: 
-- google_appengine(.*/)?
+skip_files:
 - ^(.*/)?.*\.py[co~]
 - (.*~)
 - (\..*)
