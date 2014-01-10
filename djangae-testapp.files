@@ -7353,3 +7353,4 @@ testapp/settings.py
 testapp/urls.py
 testapp/wsgi.py
 manage.py
+djangae/management/commands/flush.py
