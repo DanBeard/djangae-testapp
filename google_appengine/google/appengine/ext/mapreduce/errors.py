@@ -28,8 +28,6 @@
 
 
 
-
-
 """Map Reduce framework errors."""
 
 
@@ -46,7 +44,9 @@ __all__ = [
     "NotEnoughArgumentsError",
     "RetrySliceError",
     "ShuffleServiceError",
+    "InvalidRecordError",
     ]
+
 
 class Error(Exception):
   """Base-class for exceptions in this module."""
@@ -76,16 +76,20 @@ class BadWriterParamsError(BadParamsError):
   """The input parameters to a reader were invalid."""
 
 
-class ShuffleServiceError(Error):
-  """Error doing shuffle through shuffle service."""
+class FailJobError(Error):
+  """The job will be failed if this exception is thrown anywhere."""
+
+
+class NotEnoughArgumentsError(Error):
+  """Required argument is missing."""
 
 
 class BadCombinerOutputError(Error):
   """Combiner outputs data instead of yielding it."""
 
 
-class FailJobError(Error):
-  """The job will be failed if this exception is thrown anywhere."""
+class ShuffleServiceError(Error):
+  """Error doing shuffle through shuffle service."""
 
 
 class RetrySliceError(Error):
@@ -96,6 +100,5 @@ class RetrySliceError(Error):
   """
 
 
-class NotEnoughArgumentsError(Error):
-  """Required argument is missing."""
-
+class InvalidRecordError(Error):
+  """Raised when invalid record encountered."""

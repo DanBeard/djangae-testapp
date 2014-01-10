@@ -261,7 +261,7 @@ def _DefaultValueConstructorForField(field):
             message._listener_for_children, field.message_type)
       return MakeRepeatedMessageDefault
     else:
-      type_checker = type_checkers.GetTypeChecker(field.cpp_type, field.type)
+      type_checker = type_checkers.GetTypeChecker(field)
       def MakeRepeatedScalarDefault(message):
         return containers.RepeatedScalarFieldContainer(
             message._listener_for_children, type_checker)
@@ -429,7 +429,7 @@ def _AddPropertiesForNonRepeatedScalarField(field, cls):
   """
   proto_field_name = field.name
   property_name = _PropertyName(proto_field_name)
-  type_checker = type_checkers.GetTypeChecker(field.cpp_type, field.type)
+  type_checker = type_checkers.GetTypeChecker(field)
   default_value = field.default_value
   valid_values = set()
 
@@ -440,8 +440,8 @@ def _AddPropertiesForNonRepeatedScalarField(field, cls):
   getter.__module__ = None
   getter.__doc__ = 'Getter for %s.' % proto_field_name
   def setter(self, new_value):
-    type_checker.CheckValue(new_value)
-    self._fields[field] = new_value
+
+    self._fields[field] = type_checker.CheckValue(new_value)
 
 
     if not self._cached_byte_size_dirty:
@@ -752,8 +752,8 @@ def _AddSerializeToStringMethod(message_descriptor, cls):
     errors = []
     if not self.IsInitialized():
       raise message_mod.EncodeError(
-          'Message is missing required fields: ' +
-          ','.join(self.FindInitializationErrors()))
+          'Message %s is missing required fields: %s' % (
+          self.DESCRIPTOR.full_name, ','.join(self.FindInitializationErrors())))
     return self.SerializePartialToString()
   cls.SerializeToString = SerializeToString
 
@@ -907,7 +907,8 @@ def _AddMergeFromMethod(cls):
   def MergeFrom(self, msg):
     if not isinstance(msg, cls):
       raise TypeError(
-          "Parameter to MergeFrom() must be instance of same class.")
+          "Parameter to MergeFrom() must be instance of same class: "
+          "expected %s got %s." % (cls.__name__, type(msg).__name__))
 
     assert msg is not self
     self._Modified()
@@ -1121,9 +1122,10 @@ class _ExtensionDict(object):
 
 
     type_checker = type_checkers.GetTypeChecker(
-        extension_handle.cpp_type, extension_handle.type)
-    type_checker.CheckValue(value)
-    self._extended_message._fields[extension_handle] = value
+        extension_handle)
+
+    self._extended_message._fields[extension_handle] = (
+      type_checker.CheckValue(value))
     self._extended_message._Modified()
 
   def _FindExtensionByName(self, name):

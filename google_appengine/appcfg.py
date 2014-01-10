@@ -56,14 +56,28 @@ def get_dir_path(sibling):
   Raises:
     ValueError: If no proper path could be determined.
   """
-  dir_paths = [os.path.abspath(os.path.dirname(os.path.realpath(__file__))),
-               os.path.abspath(os.path.dirname(__file__))]
-  for dir_path in dir_paths:
-    sibling_path = os.path.join(dir_path, sibling)
-    if os.path.exists(sibling_path):
-      return dir_path
-  raise ValueError('Could not determine directory that contains both, this '
-                   'file and %s.' % sibling)
+  if 'GAE_SDK_ROOT' in os.environ:
+    gae_sdk_root = os.path.abspath(os.environ['GAE_SDK_ROOT'])
+
+
+
+    os.environ['GAE_SDK_ROOT'] = gae_sdk_root
+    for dir_path in [gae_sdk_root,
+                     os.path.join(gae_sdk_root, 'google_appengine')]:
+      if os.path.exists(os.path.join(dir_path, sibling)):
+        return dir_path
+    raise ValueError('GAE_SDK_ROOT %r does not refer to a valid SDK '
+                     'directory' % gae_sdk_root)
+  else:
+    py_file = __file__.replace('.pyc', '.py')
+    dir_paths = [os.path.abspath(os.path.dirname(os.path.realpath(py_file))),
+                 os.path.abspath(os.path.dirname(py_file))]
+    for dir_path in dir_paths:
+      sibling_path = os.path.join(dir_path, sibling)
+      if os.path.exists(sibling_path):
+        return dir_path
+    raise ValueError('Could not determine SDK root; please set GAE_SDK_ROOT '
+                     'environment variable.')
 
 
 
@@ -81,24 +95,33 @@ GOOGLE_SQL_DIR = os.path.join(
 EXTRA_PATHS = [
   DIR_PATH,
   os.path.join(DIR_PATH, 'lib', 'antlr3'),
-  os.path.join(DIR_PATH, 'lib', 'django_0_96'),
+  os.path.join(DIR_PATH, 'lib', 'django-0.96'),
   os.path.join(DIR_PATH, 'lib', 'fancy_urllib'),
   os.path.join(DIR_PATH, 'lib', 'ipaddr'),
-  os.path.join(DIR_PATH, 'lib', 'jinja2'),
-  os.path.join(DIR_PATH, 'lib', 'protorpc'),
+  os.path.join(DIR_PATH, 'lib', 'jinja2-2.6'),
+  os.path.join(DIR_PATH, 'lib', 'protorpc-1.0'),
   os.path.join(DIR_PATH, 'lib', 'PyAMF'),
   os.path.join(DIR_PATH, 'lib', 'markupsafe'),
   os.path.join(DIR_PATH, 'lib', 'webob_0_9'),
-  os.path.join(DIR_PATH, 'lib', 'webapp2'),
+  os.path.join(DIR_PATH, 'lib', 'webapp2-2.5.2'),
   os.path.join(DIR_PATH, 'lib', 'yaml', 'lib'),
   os.path.join(DIR_PATH, 'lib', 'simplejson'),
-  os.path.join(DIR_PATH, 'lib', 'google.appengine._internal.graphy'),
 ]
 
 API_SERVER_EXTRA_PATHS = [
   os.path.join(DIR_PATH, 'lib', 'argparse'),
 ]
 API_SERVER_EXTRA_PATH_SCRIPTS = 'api_server'
+
+
+
+
+ENDPOINTSCFG_EXTRA_PATHS = [
+  os.path.join(DIR_PATH, 'lib', 'cherrypy'),
+  os.path.join(DIR_PATH, 'lib', 'concurrent'),
+  os.path.join(DIR_PATH, 'lib', 'endpoints-1.0'),
+]
+ENDPOINTSCFG_EXTRA_PATH_SCRIPTS = 'endpointscfg'
 
 
 OAUTH_CLIENT_EXTRA_PATHS = [
@@ -123,7 +146,7 @@ GOOGLE_SQL_EXTRA_PATH_SCRIPTS = 'google_sql'
 
 
 SCRIPT_EXCEPTIONS = {
-  "dev_appserver.py" : "dev_appserver_main.py"
+  "old_dev_appserver.py" : "dev_appserver_main.py"
 }
 
 SCRIPT_DIR_EXCEPTIONS = {
@@ -148,6 +171,8 @@ def run_file(file_path, globals_, script_dir=SCRIPT_DIR):
     extra_extra_paths = GOOGLE_SQL_EXTRA_PATHS
   elif re.match(API_SERVER_EXTRA_PATH_SCRIPTS, script_name):
     extra_extra_paths = API_SERVER_EXTRA_PATHS
+  elif re.match(ENDPOINTSCFG_EXTRA_PATH_SCRIPTS, script_name):
+    extra_extra_paths = ENDPOINTSCFG_EXTRA_PATHS
   else:
     extra_extra_paths = []
   fix_sys_path(extra_extra_paths)
