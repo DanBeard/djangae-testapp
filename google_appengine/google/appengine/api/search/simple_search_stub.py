@@ -29,9 +29,12 @@
 
 
 
+import base64
 import bisect
 import copy
 import cPickle as pickle
+import datetime
+import functools
 import logging
 import math
 import os
@@ -62,6 +65,7 @@ __all__ = ['IndexConsistencyError',
            'RamInvertedIndex',
            'SearchServiceStub',
            'SimpleIndex',
+           'FieldTypesDict',
           ]
 
 _VISIBLE_PRINTABLE_ASCII = frozenset(
@@ -69,7 +73,7 @@ _VISIBLE_PRINTABLE_ASCII = frozenset(
 
 
 class IndexConsistencyError(Exception):
-  """Indicates attempt to create index with same name different consistency."""
+  """Deprecated 1.7.7. Accessed index with same name different consistency."""
 
 
 class Posting(object):
@@ -226,13 +230,46 @@ class _DocumentStatistics(object):
     return search_util.Repr(self, [('term_stats', self.term_stats)])
 
 
+class FieldTypesDict(object):
+  """Dictionary-like object for type mappings."""
+
+  def __init__(self):
+    self._field_types = []
+
+  def __contains__(self, name):
+    return name in [ f.name() for f in self._field_types ]
+
+  def __getitem__(self, name):
+    for f in self._field_types:
+      if name == f.name():
+        return f
+    raise KeyError, name
+
+  def AddFieldType(self, name, field_type):
+    field_types = None
+    for f in self._field_types:
+      if name == f.name():
+        field_types = f
+    if field_types is None:
+      field_types = document_pb.FieldTypes()
+      field_types.set_name(name)
+      self._field_types.append(field_types)
+    if field_type not in field_types.type_list():
+      field_types.add_type(field_type)
+
+  def __iter__(self):
+    return iter(sorted([f.name() for f in self._field_types]))
+
+  def __repr__(self):
+    return repr(self._field_types)
+
 class RamInvertedIndex(object):
   """A simple RAM-resident inverted file over documents."""
 
   def __init__(self, tokenizer):
     self._tokenizer = tokenizer
     self._inverted_index = {}
-    self._schema = {}
+    self._schema = FieldTypesDict()
     self._document_ids = set([])
 
   def _AddDocumentId(self, doc_id):
@@ -250,13 +287,7 @@ class RamInvertedIndex(object):
 
   def _AddFieldType(self, name, field_type):
     """Adds the type to the list supported for a named field."""
-    if name not in self._schema:
-      field_types = document_pb.FieldTypes()
-      field_types.set_name(name)
-      self._schema[name] = field_types
-    field_types = self._schema[name]
-    if field_type not in field_types.type_list():
-      field_types.add_type(field_type)
+    self._schema.AddFieldType(name, field_type)
 
   def GetDocumentStats(self, document):
     """Gets statistics about occurrences of terms in document."""
@@ -350,6 +381,20 @@ class SimpleIndex(object):
       if not doc_id:
         doc_id = str(uuid.uuid4())
         document.set_id(doc_id)
+
+
+
+
+
+
+
+      try:
+        search._NewDocumentFromPb(document)
+      except ValueError, e:
+        new_status = response.add_status()
+        new_status.set_code(search_service_pb.SearchServiceError.INVALID_REQUEST)
+        new_status.set_error_detail(e.message)
+        continue
       response.add_doc_id(doc_id)
       if doc_id in self._documents:
         old_document = self._documents[doc_id]
@@ -417,7 +462,7 @@ class SimpleIndex(object):
     if node.getType() in search_util.TEXT_QUERY_TYPES:
       return set([query_parser.GetQueryNodeText(node).strip('"')])
     elif node.children:
-      if node.getType() is QueryParser.RESTRICTION and len(node.children) > 1:
+      if node.getType() == QueryParser.EQ and len(node.children) > 1:
         children = node.children[1:]
       else:
         children = node.children
@@ -429,7 +474,7 @@ class SimpleIndex(object):
     return set()
 
   def _CollectFields(self, node):
-    if node.getType() is QueryParser.RESTRICTION and node.children:
+    if node.getType() == QueryParser.EQ and node.children:
       return set([query_parser.GetQueryNodeText(node.children[0])])
     elif node.children:
       result = set()
@@ -440,8 +485,7 @@ class SimpleIndex(object):
 
   def _Evaluate(self, node, score=True):
     """Retrieve scored results for a search query."""
-    doc_match = document_matcher.DocumentMatcher(
-        node, self._parser, self._inverted_index)
+    doc_match = document_matcher.DocumentMatcher(node, self._inverted_index)
 
     matched_documents = doc_match.FilterDocuments(self._documents.itervalues())
     terms = self._CollectTerms(node)
@@ -457,32 +501,49 @@ class SimpleIndex(object):
     if not search_params.sort_spec_size():
       return sorted(docs, key=lambda doc: doc.document.order_id(), reverse=True)
 
-
-    sort_spec = search_params.sort_spec(0)
-
-    if not (sort_spec.has_default_value_text() or
-            sort_spec.has_default_value_numeric()):
-      raise Exception('A default value must be specified for sorting.')
-    elif sort_spec.has_default_value_text():
-      default_value = sort_spec.default_value_text()
-    else:
-      default_value = sort_spec.default_value_numeric()
-
     def SortKey(scored_doc):
-      """Return the sort key for a document based on the request parameters."""
-      field = search_util.GetFieldInDocument(
-          scored_doc.document, sort_spec.sort_expression())
-      if not field:
-        return default_value
+      """Return the sort key for a document based on the request parameters.
 
-      string_val = field.value().string_value()
-      if field.value().type() in search_util.NUMBER_DOCUMENT_FIELD_TYPES:
-        return float(string_val)
-      if field.value().type() is document_pb.FieldValue.DATE:
-        return search_util.EpochTime(search_util.DeserializeDate(string_val))
-      return string_val
+      Arguments:
+        scored_doc: The document to score
 
-    return sorted(docs, key=SortKey, reverse=sort_spec.sort_descending())
+      Returns:
+        The sort key of a document. The sort key is a tuple, where the nth
+        element in the tuple corresponds to the value of the nth sort expression
+        evaluated on the document.
+
+      Raises:
+        Exception: if no default value is specified.
+      """
+      expr_vals = []
+      for sort_spec in search_params.sort_spec_list():
+        if not (sort_spec.has_default_value_text() or
+                sort_spec.has_default_value_numeric()):
+          raise Exception('A default value must be specified for sorting.')
+        elif sort_spec.has_default_value_text():
+          default_value = sort_spec.default_value_text()
+        else:
+          default_value = sort_spec.default_value_numeric()
+        val = expression_evaluator.ExpressionEvaluator(
+            scored_doc, self._inverted_index).ValueOf(
+                sort_spec.sort_expression(), default_value=default_value)
+        if isinstance(val, datetime.datetime):
+          val = search_util.EpochTime(val)
+        expr_vals.append(val)
+      return tuple(expr_vals)
+
+    def SortCmp(x, y):
+      """The comparison function for sort keys."""
+
+
+      for i, val_tuple in enumerate(zip(x, y)):
+        cmp_val = cmp(*val_tuple)
+        if cmp_val:
+          if search_params.sort_spec(i).sort_descending():
+            return -cmp_val
+          return cmp_val
+      return 0
+    return sorted(docs, key=SortKey, cmp=SortCmp)
 
   def _AttachExpressions(self, docs, search_params):
     if search_params.has_field_spec():
@@ -497,18 +558,16 @@ class SimpleIndex(object):
     """Searches the simple index for ."""
     query = urllib.unquote(search_request.query())
     query = query.strip()
-    if not query:
-      return [_ScoredDocument(document, 0) for document in
-              copy.copy(self._documents.values())]
-    if not isinstance(query, unicode):
-      query = unicode(query, 'utf-8')
-    query_tree = query_parser.Simplify(query_parser.Parse(query))
-
     score = _ScoreRequested(search_request)
-    docs = self._Evaluate(query_tree, score=score)
+    if not query:
+      docs = [_ScoredDocument(doc, 0.0) for doc in self._documents.values()]
+    else:
+      if not isinstance(query, unicode):
+        query = unicode(query, 'utf-8')
+      query_tree = query_parser.ParseAndSimplify(query)
+      docs = self._Evaluate(query_tree, score=score)
     docs = self._Sort(docs, search_request, score)
     docs = self._AttachExpressions(docs, search_request)
-
     return docs
 
   def GetSchema(self):
@@ -528,6 +587,11 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
   NOT a subclass of SearchService itself.  Services are provided by
   the methods prefixed by "_Dynamic_".
   """
+
+
+
+
+  _VERSION = 1
 
   def __init__(self, service_name='search', index_file=None):
     """Constructor.
@@ -575,11 +639,6 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
         self.__indexes[namespace][index_spec.name()] = index
       else:
         return None
-    elif index.index_spec.consistency() != index_spec.consistency():
-      raise IndexConsistencyError(
-          'Cannot create index of same name with different consistency mode '
-          '(found %s, requested %s)' % (
-              index.index_spec.consistency(), index_spec.consistency()))
     return index
 
   def _Dynamic_IndexDocument(self, request, response):
@@ -592,11 +651,8 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
       response: An search_service_pb.IndexDocumentResponse.
     """
     params = request.params()
-    try:
-      index = self._GetIndex(params.index_spec(), create=True)
-      index.IndexDocuments(params.document_list(), response)
-    except IndexConsistencyError, exception:
-      self._InvalidRequest(response.add_status(), exception)
+    index = self._GetIndex(params.index_spec(), create=True)
+    index.IndexDocuments(params.document_list(), response)
 
   def _Dynamic_DeleteDocument(self, request, response):
     """A local implementation of SearchService.DeleteDocument RPC.
@@ -607,14 +663,11 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
     """
     params = request.params()
     index_spec = params.index_spec()
-    try:
-      index = self._GetIndex(index_spec)
-      if index is None:
-        self._UnknownIndex(response.add_status(), index_spec)
-        return
-      index.DeleteDocuments(params.doc_id_list(), response)
-    except IndexConsistencyError, exception:
-      self._InvalidRequest(response.add_status(), exception)
+    index = self._GetIndex(index_spec)
+    if index is None:
+      self._UnknownIndex(response.add_status(), index_spec)
+      return
+    index.DeleteDocuments(params.doc_id_list(), response)
 
   def _Dynamic_ListIndexes(self, request, response):
     """A local implementation of SearchService.ListIndexes RPC.
@@ -640,9 +693,6 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
             ''.join(random.choice(list(_VISIBLE_PRINTABLE_ASCII))
                     for _ in xrange(random.randint(
                         0, search.MAXIMUM_INDEX_NAME_LENGTH))))
-        new_index_spec.set_consistency(random.choice([
-            search_service_pb.IndexSpec.GLOBAL,
-            search_service_pb.IndexSpec.PER_DOCUMENT]))
       response.mutable_status().set_code(
           random.choice([search_service_pb.SearchServiceError.OK] * 10 +
                         [search_service_pb.SearchServiceError.TRANSIENT_ERROR] +
@@ -678,7 +728,7 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
       metadata = response.add_index_metadata()
       new_index_spec = metadata.mutable_index_spec()
       new_index_spec.set_name(index_spec.name())
-      new_index_spec.set_consistency(index_spec.consistency())
+      new_index_spec.set_namespace(index_spec.namespace())
       if params.fetch_schema():
         self._AddSchemaInformation(index, metadata)
 
@@ -803,35 +853,28 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
     self._FillSearchResponse(results, position_range, params.cursor_type(),
                              _ScoreRequested(params), response)
 
-  def _CopyBaseDocument(self, doc, doc_copy):
+  def _CopyDocument(self, doc, doc_copy, field_names, ids_only=None):
+    """Copies Document, doc, to doc_copy restricting fields to field_names."""
     doc_copy.set_id(doc.id())
-    if doc.has_order_id():
-      doc_copy.set_order_id(doc.order_id())
+    if ids_only:
+      return
     if doc.has_language():
       doc_copy.set_language(doc.language())
-
-  def _CopyDocument(self, doc, doc_copy, field_spec=None, ids_only=None):
-    """Copies Document, doc, to doc_copy restricting fields to field_spec."""
-    if ids_only:
-      self._CopyBaseDocument(doc, doc_copy)
-    elif field_spec and field_spec.name_list():
-      self._CopyBaseDocument(doc, doc_copy)
-      for field in doc.field_list():
-        if field.name() in field_spec.name_list():
-          doc_copy.add_field().CopyFrom(field)
-    else:
-      doc_copy.CopyFrom(doc)
+    for field in doc.field_list():
+      if not field_names or field.name() in field_names:
+        doc_copy.add_field().CopyFrom(field)
+    doc_copy.set_order_id(doc.order_id())
 
   def _FillSearchResponse(self, results, position_range, cursor_type, score,
-                          response, field_spec=None, ids_only=None):
+                          response, field_names=None, ids_only=None):
     """Fills the SearchResponse with a selection of results."""
     for i in position_range:
       result = results[i]
       search_result = response.add_result()
       self._CopyDocument(result.document, search_result.mutable_document(),
-                         field_spec, ids_only)
-      if cursor_type is search_service_pb.SearchParams.PER_RESULT:
-        search_result.set_cursor(result.document.id())
+                         field_names, ids_only)
+      if cursor_type == search_service_pb.SearchParams.PER_RESULT:
+        search_result.set_cursor(self._EncodeCursor(result.document))
       if score:
         search_result.add_score(result.score)
       for field, expression in result.expressions.iteritems():
@@ -844,6 +887,7 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
           expr.mutable_value().set_type(document_pb.FieldValue.NUMBER)
         else:
           expr.mutable_value().set_string_value(expression)
+          expr.mutable_value().set_type(document_pb.FieldValue.HTML)
 
   def _Dynamic_Search(self, request, response):
     """A local implementation of SearchService.Search RPC.
@@ -857,49 +901,69 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
       return
 
     index = None
-    try:
-      index = self._GetIndex(request.params().index_spec())
-      if index is None:
-        self._UnknownIndex(response.mutable_status(),
-                           request.params().index_spec())
-        return
-    except IndexConsistencyError, exception:
-      self._InvalidRequest(response.mutable_status(), exception)
+    index = self._GetIndex(request.params().index_spec())
+    if index is None:
+      self._UnknownIndex(response.mutable_status(),
+                         request.params().index_spec())
+      response.set_matched_count(0)
       return
 
     params = request.params()
-    results = index.Search(params)
+    try:
+      results = index.Search(params)
+    except query_parser.QueryException, e:
+      self._InvalidRequest(response.mutable_status(), e)
+      response.set_matched_count(0)
+      return
+    except document_matcher.ExpressionTreeException, e:
+      self._InvalidRequest(response.mutable_status(), e)
+      response.set_matched_count(0)
+      return
     response.set_matched_count(len(results))
 
     offset = 0
     if params.has_cursor():
-      positions = [i for i in range(len(results)) if results[i].document.id() is
-                   params.cursor()]
-      if positions:
-        offset = positions[0] + 1
+      doc_id = self._DecodeCursor(params.cursor())
+      for i, result in enumerate(results):
+        if result.document.id() == doc_id:
+          offset = i + 1
+          break
     elif params.has_offset():
       offset = params.offset()
 
 
 
     if offset < len(results):
-      position_range = range(
-          offset,
-          min(offset + params.limit(), len(results)))
+
+
+      limit = offset + params.limit()
+      if limit >= len(results):
+
+
+        range_end = len(results)
+      else:
+
+
+
+        range_end = limit
+        if params.cursor_type() == search_service_pb.SearchParams.SINGLE:
+          document = results[range_end - 1].document
+          response.set_cursor(self._EncodeCursor(document))
+      result_range = range(offset, range_end)
     else:
-      position_range = range(0)
-    field_spec = None
-    if params.has_field_spec():
-      field_spec = params.field_spec()
-    self._FillSearchResponse(results, position_range, params.cursor_type(),
-                             _ScoreRequested(params), response, field_spec,
+      result_range = range(0)
+    field_names = params.field_spec().name_list()
+    self._FillSearchResponse(results, result_range, params.cursor_type(),
+                             _ScoreRequested(params), response, field_names,
                              params.keys_only())
-    if (params.cursor_type() is search_service_pb.SearchParams.SINGLE and
-        len(position_range)):
-      response.set_cursor(
-          results[position_range[len(position_range) - 1]].document.id())
 
     response.mutable_status().set_code(search_service_pb.SearchServiceError.OK)
+
+  def _EncodeCursor(self, document):
+    return base64.urlsafe_b64encode(document.id())
+
+  def _DecodeCursor(self, cursor):
+    return base64.urlsafe_b64decode(cursor)
 
   def __repr__(self):
     return search_util.Repr(self, [('__indexes', self.__indexes)])
@@ -922,7 +986,7 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
 
     pickler = pickle.Pickler(tmpfile, protocol=1)
     pickler.fast = True
-    pickler.dump(self.__indexes)
+    pickler.dump((self._VERSION, self.__indexes))
 
     tmpfile.close()
 
@@ -943,12 +1007,17 @@ class SearchServiceStub(apiproxy_stub.APIProxyStub):
     self.__index_file_lock.acquire()
     try:
       if os.path.isfile(self.__index_file):
-        return pickle.load(open(self.__index_file, 'rb'))
+        version, indexes = pickle.load(open(self.__index_file, 'rb'))
+        if version == self._VERSION:
+          return indexes
+        logging.warning(
+            'Saved search indexes are not compatible with this version of the '
+            'SDK. Search indexes have been cleared.')
       else:
         logging.warning(
             'Could not read search indexes from %s', self.__index_file)
     except (AttributeError, LookupError, ImportError, NameError, TypeError,
-            ValueError, pickle.PickleError), e:
+            ValueError, pickle.PickleError, IOError), e:
       logging.warning(
           'Could not read indexes from %s. Try running with the '
           '--clear_search_index flag. Cause:\n%r' % (self.__index_file, e))

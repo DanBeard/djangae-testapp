@@ -178,6 +178,7 @@ EXTENSION_BLACKLIST = [
 
 
 HEADER_WHITELIST = frozenset([
+    'Auto-Submitted',
     'In-Reply-To',
     'List-Id',
     'List-Unsubscribe',
@@ -459,6 +460,35 @@ def _GetMimeType(file_name):
   return mime_type
 
 
+def _GuessCharset(text):
+  """Guess the charset of a text.
+
+  Args:
+    text: a string (str) that is either a us-ascii string or a unicode that was
+        encoded in utf-8.
+  Returns:
+    Charset needed by the string, either 'us-ascii' or 'utf-8'.
+  """
+  try:
+    text.decode('us-ascii')
+    return 'us-ascii'
+  except UnicodeDecodeError:
+    return 'utf-8'
+
+
+def _I18nHeader(text):
+  """Creates a header properly encoded even with unicode content.
+
+  Args:
+    text: a string (str) that is either a us-ascii string or a unicode that was
+        encoded in utf-8.
+  Returns:
+    email.header.Header
+  """
+  charset = _GuessCharset(text)
+  return email.header.Header(text, charset, maxlinelen=1e3000)
+
+
 def mail_message_to_mime_message(protocol_message):
   """Generate a MIMEMultitype message from protocol buffer.
 
@@ -480,10 +510,13 @@ def mail_message_to_mime_message(protocol_message):
   """
   parts = []
   if protocol_message.has_textbody():
-    parts.append(MIMEText.MIMEText(protocol_message.textbody()))
+    parts.append(MIMEText.MIMEText(
+        protocol_message.textbody(),
+        _charset=_GuessCharset(protocol_message.textbody())))
   if protocol_message.has_htmlbody():
-    parts.append(MIMEText.MIMEText(protocol_message.htmlbody(),
-                                   _subtype='html'))
+    parts.append(MIMEText.MIMEText(
+        protocol_message.htmlbody(), _subtype='html',
+        _charset=_GuessCharset(protocol_message.htmlbody())))
 
   if len(parts) == 1:
 
@@ -507,18 +540,18 @@ def mail_message_to_mime_message(protocol_message):
 
 
   if protocol_message.to_size():
-    result['To'] = ', '.join(protocol_message.to_list())
+    result['To'] = _I18nHeader(', '.join(protocol_message.to_list()))
   if protocol_message.cc_size():
-    result['Cc'] = ', '.join(protocol_message.cc_list())
+    result['Cc'] = _I18nHeader(', '.join(protocol_message.cc_list()))
   if protocol_message.bcc_size():
-    result['Bcc'] = ', '.join(protocol_message.bcc_list())
+    result['Bcc'] = _I18nHeader(', '.join(protocol_message.bcc_list()))
 
-  result['From'] = protocol_message.sender()
-  result['Reply-To'] = protocol_message.replyto()
-  result['Subject'] = protocol_message.subject()
+  result['From'] = _I18nHeader(protocol_message.sender())
+  result['Reply-To'] = _I18nHeader(protocol_message.replyto())
+  result['Subject'] = _I18nHeader(protocol_message.subject())
 
   for header in protocol_message.header_list():
-    result[header.name()] = header.value()
+    result[header.name()] = _I18nHeader(header.value())
 
   return result
 
@@ -579,7 +612,7 @@ def _decode_address_list_field(address_list):
 class EncodedPayload(object):
   """Wrapper for a payload that contains encoding information.
 
-  When an email is recieved, it is usually encoded using a certain
+  When an email is received, it is usually encoded using a certain
   character set, and then possibly further encoded using a transfer
   encoding in that character set.  Most of the times, it is possible
   to decode the encoded payload as is, however, in the case where it
@@ -653,6 +686,10 @@ class EncodedPayload(object):
               self.encoding == other.encoding)
     else:
       return NotImplemented
+
+  def __hash__(self):
+    """Hash an EncodedPayload."""
+    return hash((self.payload, self.charset, self.encoding))
 
   def copy_to(self, mime_message):
     """Copy contents to MIME message payload.

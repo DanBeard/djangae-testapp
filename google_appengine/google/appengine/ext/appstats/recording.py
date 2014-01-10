@@ -150,10 +150,6 @@ class ConfigDefaults(object):
   CHANNEL_CREATE_COST = _to_micropennies_per_op(1, 100)
 
 
-
-  CHANNEL_PRESENCE_COST = _to_micropennies_per_op(10, 100000)
-
-
   XMPP_STANZA_COST = _to_micropennies_per_op(10, 100000)
 
 
@@ -524,10 +520,6 @@ class Recorder(object):
       trace.set_call_cost_microdollars(config.CHANNEL_CREATE_COST)
       _add_billed_op_to_trace(trace, 1,
                               datamodel_pb.BilledOpProto.CHANNEL_OPEN)
-    elif call == 'GetPresence':
-      trace.set_call_cost_microdollars(config.CHANNEL_PRESENCE_COST)
-      _add_billed_op_to_trace(trace, 1,
-                              datamodel_pb.BilledOpProto.CHANNEL_PRESENCE)
 
   def record_mail_details(self, call, request, trace):
     """Records information relating to mail RPCs.
@@ -815,7 +807,7 @@ class Recorder(object):
       An integer expressing megacycles.
     """
     warnings.warn('get_total_api_mcycles does not return a meaningful value',
-                  DeprecationWarning,
+                  UserWarning,
                   stacklevel=2)
     return 0
 
@@ -1076,20 +1068,20 @@ class StatsProto(object):
       An integer expressing milliseconds.
     """
     warnings.warn('api_milliseconds does not return a meaningful value',
-                  DeprecationWarning,
+                  UserWarning,
                   stacklevel=2)
     return 0
 
   def processor_mcycles(self):
     warnings.warn('processor_mcycles does not return correct values',
-                  DeprecationWarning,
+                  UserWarning,
                   stacklevel=2)
     return self._proto.processor_mcycles()
 
   def processor_milliseconds(self):
     """Return an int giving .processor_mcycles() converted to milliseconds."""
     warnings.warn('processor_milliseconds does not return correct values',
-                  DeprecationWarning,
+                  UserWarning,
                   stacklevel=2)
     return mcycles_to_msecs(self._proto.processor_mcycles())
 

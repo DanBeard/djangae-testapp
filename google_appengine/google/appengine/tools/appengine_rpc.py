@@ -38,6 +38,20 @@ import urllib2
 
 from google.appengine.tools import dev_appserver_login
 
+_UPLOADING_APP_DOC_URLS = {
+    "go": "https://developers.google.com/appengine/docs/go/tools/"
+        "uploadinganapp#Go_Password-less_login_with_OAuth2",
+    "php": "https://developers.google.com/appengine/docs/php/tools/"
+        "uploadinganapp#PHP_Password-less_login_with_OAuth2",
+    "python": "https://developers.google.com/appengine/docs/python/tools/"
+        "uploadinganapp#Python_Password-less_login_with_OAuth2",
+    "python27": "https://developers.google.com/appengine/docs/python/tools/"
+        "uploadinganapp#Python_Password-less_login_with_OAuth2",
+    "java": "https://developers.google.com/appengine/docs/java/tools/"
+        "uploadinganapp#Passwordless_Login_with_OAuth2",
+    "java7": "https://developers.google.com/appengine/docs/java/tools/"
+        "uploadinganapp#Passwordless_Login_with_OAuth2",
+    }
 
 logger = logging.getLogger('google.appengine.tools.appengine_rpc')
 
@@ -80,10 +94,10 @@ def HttpRequestToString(req, include_data=True):
     template = template + "\n%(data)s"
 
   return template % {
-      'method' : req.get_method(),
-      'selector' : req.get_selector(),
-      'type' : req.get_type().upper(),
-      'host' : req.get_host(),
+      'method': req.get_method(),
+      'selector': req.get_selector(),
+      'type': req.get_type().upper(),
+      'host': req.get_host(),
       'headers': headers,
       'data': req.get_data(),
       }
@@ -94,11 +108,17 @@ class ClientLoginError(urllib2.HTTPError):
   def __init__(self, url, code, msg, headers, args):
     urllib2.HTTPError.__init__(self, url, code, msg, headers, None)
     self.args = args
-    self.reason = args["Error"]
+    self._reason = args.get("Error")
     self.info = args.get("Info")
 
   def read(self):
     return '%d %s: %s' % (self.code, self.msg, self.reason)
+
+
+
+  @property
+  def reason(self):
+    return self._reason
 
 
 class AbstractRpcServer(object):
@@ -107,10 +127,13 @@ class AbstractRpcServer(object):
 
   SUGGEST_OAUTH2 = False
 
+
+  RUNTIME = "python"
+
   def __init__(self, host, auth_function, user_agent, source,
                host_override=None, extra_headers=None, save_cookies=False,
                auth_tries=3, account_type=None, debug_data=True, secure=True,
-               rpc_tries=3):
+               ignore_certs=False, rpc_tries=3):
     """Creates a new HttpRpcServer.
 
     Args:
@@ -131,6 +154,7 @@ class AbstractRpcServer(object):
       account_type: One of GOOGLE, HOSTED_OR_GOOGLE, or None for automatic.
       debug_data: Whether debugging output should include data contents.
       secure: If the requests sent using Send should be sent over HTTPS.
+      ignore_certs: If the certificate mismatches should be ignored.
       rpc_tries: The number of rpc retries upon http server error (i.e.
         Response code >= 500 and < 600) before failing.
     """
@@ -138,6 +162,7 @@ class AbstractRpcServer(object):
       self.scheme = "https"
     else:
       self.scheme = "http"
+    self.ignore_certs = ignore_certs
     self.host = host
     self.host_override = host_override
     self.auth_function = auth_function
@@ -302,8 +327,7 @@ class AbstractRpcServer(object):
             if self.SUGGEST_OAUTH2:
               print >>sys.stderr, ("However, now the recommended way to log in "
                                    "is using OAuth2. See")
-              print >>sys.stderr, ("https://developers.google.com/appengine/"
-                                   "docs/python/tools/uploadinganapp#oauth")
+              print >>sys.stderr, _UPLOADING_APP_DOC_URLS[self.RUNTIME]
           else:
             print >>sys.stderr, "Invalid username or password."
           continue
@@ -368,7 +392,9 @@ class AbstractRpcServer(object):
         tries += 1
         url = "%s://%s%s" % (self.scheme, self.host, request_path)
         if kwargs:
-          url += "?" + urllib.urlencode(kwargs)
+
+
+          url += "?" + urllib.urlencode(sorted(kwargs.items()))
         req = self._CreateRequest(url=url, data=payload)
         req.add_header("Content-Type", content_type)
 
@@ -503,7 +529,8 @@ class HttpRpcServer(AbstractRpcServer):
     self.certpath = os.path.normpath(os.path.join(
         os.path.dirname(__file__), '..', '..', '..', 'lib', 'cacerts',
         'cacerts.txt'))
-    self.cert_file_available = os.path.exists(self.certpath)
+    self.cert_file_available = ((not kwargs.get("ignore_certs", False))
+                                and os.path.exists(self.certpath))
     super(HttpRpcServer, self).__init__(*args, **kwargs)
 
   def _CreateRequest(self, url, data=None):

@@ -23,11 +23,11 @@
 
 import base64
 import datetime
+import hashlib
 import os
 import random
 import string
 import StringIO
-import sys
 import tempfile
 import time
 
@@ -41,6 +41,7 @@ from google.appengine.api.files import file as files
 from google.appengine.api.files import file_service_pb
 from google.appengine.api.files import gs
 from google.appengine.ext import blobstore
+from google.appengine.ext.cloudstorage import cloudstorage_stub
 from google.appengine.runtime import apiproxy_errors
 
 
@@ -52,7 +53,7 @@ _now_function = datetime.datetime.now
 
 
 def _to_seconds(datetime_obj):
-  return time.mktime(datetime_obj.timetuple())
+  return int(time.mktime(datetime_obj.timetuple()))
 
 
 def _random_string(length):
@@ -76,7 +77,7 @@ class _GoogleStorageUpload(tuple):
   """Stores information about a writable Google Storage file."""
   buf = property(lambda self: self[0])
   content_type = property(lambda self: self[1])
-  key = property(lambda self: self[2])
+  gs_filename = property(lambda self: self[2])
 
 
 class GoogleStorage(object):
@@ -84,8 +85,8 @@ class GoogleStorage(object):
 
 
 
-  def _Upload(self, buf, content_type, key):
-    return _GoogleStorageUpload([buf, content_type, key])
+  def _Upload(self, buf, content_type, gs_filename):
+    return _GoogleStorageUpload([buf, content_type, gs_filename])
 
   def __init__(self, blob_storage):
     """Constructor.
@@ -95,9 +96,19 @@ class GoogleStorage(object):
           apphosting.api.blobstore.blobstore_stub.BlobStorage instance.
     """
     self.blob_storage = blob_storage
+    self.gs_stub = cloudstorage_stub.CloudStorageStub(self.blob_storage)
     self.uploads = {}
     self.finalized = set()
     self.sequence_keys = {}
+
+  def remove_gs_prefix(self, gs_filename):
+    return gs_filename[len('/gs'):]
+
+  def add_gs_prefix(self, gs_filename):
+    return '/gs' + gs_filename
+
+  def get_blobkey(self, gs_filename):
+    return blobstore.create_gs_key(gs_filename)
 
   def has_upload(self, filename):
     """Checks if there is an upload at this filename."""
@@ -108,25 +119,15 @@ class GoogleStorage(object):
     upload = self.uploads[filename]
     self.finalized.add(filename)
     upload.buf.seek(0)
-    self.blob_storage.StoreBlob(self.get_blob_key(upload.key), upload.buf)
+    content = upload.buf.read()
+    blobkey = self.gs_stub.post_start_creation(
+        self.remove_gs_prefix(upload.gs_filename),
+        {'content-type': upload.content_type})
+    assert blobkey == self.get_blobkey(upload.gs_filename)
+    self.gs_stub.put_continue_creation(
+        blobkey, content, (0, len(content) - 1), len(content))
+
     del self.sequence_keys[filename]
-
-
-    encoded_key = blobstore.create_gs_key(upload.key)
-    file_info = datastore.Entity(GS_INFO_KIND,
-                                 name=encoded_key,
-                                 namespace='')
-    file_info['creation'] = _now_function()
-    file_info['filename'] = upload.key
-    file_info['size'] = upload.buf.len
-    file_info['content_type'] = upload.content_type
-    file_info['storage_key'] = self.get_blob_key(upload.key)
-    datastore.Put(file_info)
-
-  @staticmethod
-  def get_blob_key(key):
-    """Converts a bigstore key into a base64 encoded blob key/filename."""
-    return base64.urlsafe_b64encode(key)
 
   def is_finalized(self, filename):
     """Checks if file is already finalized."""
@@ -172,7 +173,7 @@ class GoogleStorage(object):
 
     datastore.Delete(
         datastore.Key.from_path(GS_INFO_KIND,
-                                blobstore.create_gs_key(gs_filename),
+                                self.get_blobkey(gs_filename),
                                 namespace=''))
     return writable_name
 
@@ -187,22 +188,24 @@ class GoogleStorage(object):
       self.sequence_keys[filename] = sequence_key
     self.uploads[filename].buf.write(data)
 
-  def stat(self, filename):
+  def stat(self, gs_filename):
     """
     Returns:
       file info for a finalized file with given filename
     """
-    blob_key = blobstore.create_gs_key(filename)
+    blob_key = self.get_blobkey(gs_filename)
     try:
-      return datastore.Get(
+      fileinfo = datastore.Get(
           datastore.Key.from_path(GS_INFO_KIND, blob_key, namespace=''))
+      fileinfo['filename'] = self.add_gs_prefix(fileinfo['filename'])
+      return fileinfo
     except datastore_errors.EntityNotFoundError:
       raise raise_error(file_service_pb.FileServiceErrors.EXISTENCE_ERROR,
-                        filename)
+                        gs_filename)
 
-  def get_reader(self, filename):
+  def get_reader(self, gs_filename):
     try:
-      return self.blob_storage.OpenBlob(self.get_blob_key(filename))
+      return self.blob_storage.OpenBlob(self.get_blobkey(gs_filename))
     except IOError:
       return None
 
@@ -217,7 +220,7 @@ class GoogleStorage(object):
       A list of fully qualified filenames under a certain path sorted by in
       char order.
     """
-    path = request.path()
+    path = self.remove_gs_prefix(request.path())
     prefix = request.prefix() if request.has_prefix() else ''
 
     q = datastore.Query(GS_INFO_KIND, namespace='')
@@ -230,11 +233,11 @@ class GoogleStorage(object):
     if request.has_max_keys():
       max_keys = request.max_keys()
     else:
-      max_keys = sys.maxint
+      max_keys = 2**31-1
     for gs_file_info in q.Get(max_keys):
       filename = gs_file_info['filename']
       if filename.startswith(fully_qualified_name):
-        response.add_filenames(filename)
+        response.add_filenames(self.add_gs_prefix(filename))
       else:
         break
 
@@ -448,6 +451,16 @@ class BlobstoreStorage(object):
       return f
     return self.data_files[filename]
 
+  def get_md5_from_blob(self, blobkey):
+    """Get md5 hexdigest of the blobfile with blobkey."""
+    try:
+      f = self.blob_storage.OpenBlob(blobkey)
+      file_md5 = hashlib.md5()
+      file_md5.update(f.read())
+      return file_md5.hexdigest()
+    finally:
+      f.close()
+
   def append(self, filename, data):
     """Append data to file."""
     self._get_data_file(filename).write(data)
@@ -582,6 +595,7 @@ class BlobstoreFile(object):
     blob_info['filename'] = self.blob_file_name
     blob_info['size'] = size
     blob_info['creation_handle'] = self.ticket
+    blob_info['md5_hash'] = self.file_storage.get_md5_from_blob(blob_key)
     datastore.Put(blob_info)
 
     blob_file = datastore.Entity('__BlobFileIndex__',
