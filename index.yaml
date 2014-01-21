@@ -15,7 +15,32 @@ indexes:
   - name: codename
   - name: content_type_id
 
+- kind: auth_user
+  properties:
+  - name: date_joined
+  - name: email
+  - name: first_name
+  - name: is_active
+  - name: is_staff
+  - name: is_superuser
+  - name: last_login
+  - name: last_name
+  - name: password
+  - name: username
+
+- kind: django_content_type
+  properties:
+  - name: app_label
+  - name: model
+  - name: name
+
 - kind: django_migrations
   properties:
   - name: app
+  - name: name
+
+- kind: django_site
+  properties:
+  - name: __key__
+  - name: domain
   - name: name
