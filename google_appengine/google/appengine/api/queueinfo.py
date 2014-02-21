@@ -134,6 +134,7 @@ available to an app, it is clamped.
 
 
 
+from google.appengine.api import appinfo
 from google.appengine.api import validation
 from google.appengine.api import yaml_builder
 from google.appengine.api import yaml_listener
@@ -150,12 +151,12 @@ _MODE_REGEX = r'(pull)|(push)'
 
 
 
-SERVER_ID_RE_STRING = r'(?!-)[a-z\d\-]{1,63}'
+MODULE_ID_RE_STRING = r'(?!-)[a-z\d\-]{1,63}'
 
 
-SERVER_VERSION_RE_STRING = r'(?!-)[a-z\d\-]{1,100}'
-_VERSION_REGEX = r'^(?:(?:(%s):)?)(%s)$' % (SERVER_ID_RE_STRING,
-                                            SERVER_VERSION_RE_STRING)
+MODULE_VERSION_RE_STRING = r'(?!-)[a-z\d\-]{1,100}'
+_VERSION_REGEX = r'^(?:(?:(%s):)?)(%s)$' % (MODULE_ID_RE_STRING,
+                                            MODULE_VERSION_RE_STRING)
 
 QUEUE = 'queue'
 
@@ -223,6 +224,7 @@ class QueueEntry(validation.Validated):
 class QueueInfoExternal(validation.Validated):
   """QueueInfoExternal describes all queue entries for an application."""
   ATTRIBUTES = {
+      appinfo.APPLICATION: validation.Optional(appinfo.APPLICATION_RE_STRING),
       TOTAL_STORAGE_LIMIT: validation.Optional(_TOTAL_STORAGE_LIMIT_REGEX),
       QUEUE: validation.Optional(validation.Repeated(QueueEntry)),
   }
@@ -291,6 +293,7 @@ def ParseRate(rate):
   if unit == 'd':
     return number/(24 * 60 * 60)
 
+
 def ParseTotalStorageLimit(limit):
   """Parses a string representing the storage bytes limit.
 
@@ -325,6 +328,7 @@ def ParseTotalStorageLimit(limit):
   except ValueError:
     raise MalformedQueueConfiguration('Total Storage Limit "%s" is invalid.' %
                                       limit)
+
 
 def ParseTaskAgeLimit(age_limit):
   """Parses a string representing the task's age limit (maximum allowed age).
@@ -405,9 +409,9 @@ def TranslateRetryParameters(retry):
       params.set_min_backoff_sec(params.max_backoff_sec())
 
 
-  if params.has_retry_limit() and not params.retry_limit() > 0:
+  if params.has_retry_limit() and params.retry_limit() < 0:
     raise MalformedQueueConfiguration(
-        'Task retry limit must be greater than zero.')
+        'Task retry limit must not be less than zero.')
 
   if params.has_age_limit_sec() and not params.age_limit_sec() > 0:
     raise MalformedQueueConfiguration(

@@ -60,8 +60,10 @@ import os
 import select
 import shutil
 import simplejson
+import StringIO
 import struct
 import tempfile
+import wsgiref.headers
 import yaml
 
 
@@ -83,7 +85,6 @@ import urllib
 import zlib
 
 import google
-from google.pyglib import gexcept
 
 
 
@@ -106,15 +107,14 @@ from google.appengine.api import lib_config
 from google.appengine.api import mail
 from google.appengine.api import mail_stub
 from google.appengine.api import namespace_manager
+from google.appengine.api import request_info
 from google.appengine.api import urlfetch_stub
 from google.appengine.api import user_service_stub
 from google.appengine.api import yaml_errors
 from google.appengine.api.app_identity import app_identity_stub
 from google.appengine.api.blobstore import blobstore_stub
 from google.appengine.api.blobstore import file_blob_storage
-
 from google.appengine.api.capabilities import capability_stub
-from google.appengine.api.conversion import conversion_stub
 from google.appengine.api.channel import channel_service_stub
 from google.appengine.api.files import file_service_stub
 from google.appengine.api.logservice import logservice
@@ -122,6 +122,7 @@ from google.appengine.api.logservice import logservice_stub
 from google.appengine.api.search import simple_search_stub
 from google.appengine.api.taskqueue import taskqueue_stub
 from google.appengine.api.prospective_search import prospective_search_stub
+from google.appengine.api.remote_socket import _remote_socket_stub
 from google.appengine.api.memcache import memcache_stub
 from google.appengine.api import rdbms_mysqldb
 
@@ -129,7 +130,7 @@ from google.appengine.api.system import system_stub
 from google.appengine.api.xmpp import xmpp_service_stub
 from google.appengine.datastore import datastore_sqlite_stub
 from google.appengine.datastore import datastore_stub_util
-
+from google.appengine.datastore import datastore_v4_stub
 from google.appengine import dist
 
 try:
@@ -224,6 +225,16 @@ DEVEL_PAYLOAD_RAW_HEADER = 'X-AppEngine-Development-Payload'
 
 DEVEL_FAKE_IS_ADMIN_HEADER = 'HTTP_X_APPENGINE_FAKE_IS_ADMIN'
 DEVEL_FAKE_IS_ADMIN_RAW_HEADER = 'X-AppEngine-Fake-Is-Admin'
+
+FILE_STUB_DEPRECATION_MESSAGE = (
+"""The datastore file stub is deprecated, and
+will stop being the default in a future release.
+Append the --use_sqlite flag to use the new SQLite stub.
+
+You can port your existing data using the --port_sqlite_data flag or
+purge your previous test data with --clear_datastore.
+""")
+
 
 
 
@@ -730,8 +741,20 @@ class MatcherDispatcher(URLDispatcher):
 
 
 
-_IGNORE_REQUEST_HEADERS = frozenset(['content-type', 'content-length',
-                                     'accept-encoding', 'transfer-encoding'])
+
+_IGNORE_REQUEST_HEADERS = frozenset([
+    'accept-encoding',
+    'connection',
+    'keep-alive',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+
+
+    'content-type',
+    'content-length',
+    ])
 
 
 _request_id = 0
@@ -814,12 +837,8 @@ def SetupEnvironment(cgi_path,
       auth_domain = parts[1]
     env['AUTH_DOMAIN'] = auth_domain
 
-  global _request_id
-  global _request_time
-  _request_time = time.time()
   env['REQUEST_LOG_ID'] = _GenerateRequestLogId()
   env['REQUEST_ID_HASH'] = _generate_request_id_hash()
-  _request_id += 1
 
 
   for key in headers:
@@ -959,6 +978,14 @@ SHARED_MODULE_PREFIXES = set([
     'wsgiref',
 
     'MySQLdb',
+
+
+
+
+
+
+
+    'decimal',
 ])
 
 NOT_SHARED_MODULE_PREFIXES = set([
@@ -1576,20 +1603,6 @@ def ExecuteCGI(config,
     exec_py27_handler: Used for dependency injection.
   """
 
-
-
-
-
-
-
-
-
-  if handler_path == '_go_app':
-    from google.appengine.ext.go import execute_go_cgi
-    return execute_go_cgi(root_path, config, handler_path, cgi_path,
-        env, infile, outfile)
-
-
   old_module_dict = sys.modules.copy()
   old_builtin = __builtin__.__dict__.copy()
   old_argv = sys.argv
@@ -1617,8 +1630,7 @@ def ExecuteCGI(config,
 
     logservice._global_buffer = logservice.LogsBuffer()
 
-    app_log_handler = app_logging.AppLogsHandler(
-        logservice.logs_buffer().stream())
+    app_log_handler = app_logging.AppLogsHandler()
     logging.getLogger().addHandler(app_log_handler)
 
     os.environ.clear()
@@ -1693,8 +1705,6 @@ def ExecuteCGI(config,
     sys.stdin = old_stdin
     sys.stdout = old_stdout
 
-
-    logservice_stub._flush_logs_buffer()
     sys.stderr = old_stderr
     logging.getLogger().removeHandler(app_log_handler)
 
@@ -2146,9 +2156,18 @@ class FileDispatcher(URLDispatcher):
 
 
 
+
 _IGNORE_RESPONSE_HEADERS = frozenset([
-    'content-encoding', 'transfer-encoding',
-    'server', 'date', blobstore.BLOB_KEY_HEADER
+    'connection',
+    'content-encoding',
+    'date',
+    'keep-alive',
+    'proxy-authenticate',
+    'server',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+    blobstore.BLOB_KEY_HEADER
     ])
 
 
@@ -2544,13 +2563,17 @@ class ModuleManager(object):
 
       module = self._modules[name]
 
+      try:
 
-      if not os.path.isfile(fname):
-        return True
+        if mtime != os.path.getmtime(fname):
+          self._dirty = True
+          return True
+      except OSError, e:
 
-
-      if mtime != os.path.getmtime(fname):
-        return True
+        if e.errno in FILE_MISSING_EXCEPTIONS:
+          self._dirty = True
+          return True
+        raise e
 
     return False
 
@@ -2645,7 +2668,7 @@ def CreateRequestHandler(root_path,
                          login_url,
                          static_caching=True,
                          default_partition=None,
-                         persist_logs=False):
+                         interactive_console=True):
   """Creates a new BaseHTTPRequestHandler sub-class.
 
   This class will be used with the Python BaseHTTPServer module's HTTP server.
@@ -2660,7 +2683,7 @@ def CreateRequestHandler(root_path,
     login_url: Relative URL which should be used for handling user logins.
     static_caching: True if browser caching of static files should be allowed.
     default_partition: Default partition to use in the application id.
-    persist_logs: If true, log records should be durably persisted.
+    interactive_console: Whether to add the interactive console.
 
   Returns:
     Sub-class of BaseHTTPRequestHandler.
@@ -2730,7 +2753,7 @@ def CreateRequestHandler(root_path,
         args: Positional arguments passed to the superclass constructor.
         kwargs: Keyword arguments passed to the superclass constructor.
       """
-      self._log_record_writer = logservice_stub.RequestLogWriter(persist_logs)
+      self._log_record_writer = apiproxy_stub_map.apiproxy.GetStub('logservice')
       BaseHTTPServer.BaseHTTPRequestHandler.__init__(self, *args, **kwargs)
 
     def version_string(self):
@@ -2889,6 +2912,8 @@ def CreateRequestHandler(root_path,
           if any((handler.url == '/_ah/datastore_admin.*'
                   for handler in config.handlers)):
             self.headers['X-AppEngine-Datastore-Admin-Enabled'] = 'True'
+          self.headers['X-AppEngine-Interactive-Console-Enabled'] = str(
+              interactive_console)
 
         if config.api_version != API_VERSION:
           logging.error(
@@ -2921,7 +2946,11 @@ def CreateRequestHandler(root_path,
 
 
 
+        global _request_time
         global _request_id
+        _request_time = time.time()
+        _request_id += 1
+
         request_id_hash = _generate_request_id_hash()
         env_dict['REQUEST_ID_HASH'] = request_id_hash
         os.environ['REQUEST_ID_HASH'] = request_id_hash
@@ -2932,13 +2961,18 @@ def CreateRequestHandler(root_path,
         cookies = ', '.join(self.headers.getheaders('cookie'))
         email_addr, admin, user_id = dev_appserver_login.GetUserInfo(cookies)
 
-        self._log_record_writer.write_request_info(
+        self._log_record_writer.start_request(
+            request_id=None,
+            user_request_id=_GenerateRequestLogId(),
             ip=env_dict['REMOTE_ADDR'],
             app_id=env_dict['APPLICATION_ID'],
             version_id=env_dict['CURRENT_VERSION_ID'],
             nickname=email_addr.split('@')[0],
-            user_agent=self.headers.get('user-agent'),
-            host=host_name)
+            user_agent=self.headers.get('user-agent', ''),
+            host=host_name,
+            method=self.command,
+            resource=self.path,
+            http_version=self.request_version)
 
         dispatcher = MatcherDispatcher(config, login_url, self.module_manager,
                                        [implicit_matcher, explicit_matcher])
@@ -3062,9 +3096,10 @@ def CreateRequestHandler(root_path,
         code = 0
       if size == '-':
         size = 0
-      self._log_record_writer.write(self.command, self.path, code, size,
-                                    self.request_version)
 
+
+      logservice.logs_buffer().flush()
+      self._log_record_writer.end_request(None, code, size)
   return DevAppServerRequestHandler
 
 
@@ -3282,41 +3317,38 @@ def LoadAppConfig(root_path,
         cache.config = cache.matcher = cache.path = None
         cache.mtime = mtime
 
-      try:
-        config = read_app_config(appinfo_path, appinfo_includes.Parse)
+      config = read_app_config(appinfo_path, appinfo_includes.Parse)
 
-        if config.application:
-          config.application = AppIdWithDefaultPartition(config.application,
-                                                         default_partition)
-        multiprocess.GlobalProcess().NewAppInfo(config)
+      if config.application:
+        config.application = AppIdWithDefaultPartition(config.application,
+                                                       default_partition)
+      multiprocess.GlobalProcess().NewAppInfo(config)
 
-        if static_caching:
-          if config.default_expiration:
-            default_expiration = config.default_expiration
-          else:
-
-
-            default_expiration = '0'
+      if static_caching:
+        if config.default_expiration:
+          default_expiration = config.default_expiration
         else:
 
-          default_expiration = None
 
-        matcher = create_matcher(config,
-                                 root_path,
-                                 config.handlers,
-                                 module_dict,
-                                 default_expiration)
+          default_expiration = '0'
+      else:
 
-        FakeFile.SetSkippedFiles(config.skip_files)
+        default_expiration = None
 
-        if cache is not None:
-          cache.path = appinfo_path
-          cache.config = config
-          cache.matcher = matcher
+      matcher = create_matcher(config,
+                               root_path,
+                               config.handlers,
+                               module_dict,
+                               default_expiration)
 
-        return (config, matcher, False)
-      except gexcept.AbstractMethod:
-        pass
+      FakeFile.SetSkippedFiles(config.skip_files)
+
+      if cache is not None:
+        cache.path = appinfo_path
+        cache.config = config
+        cache.matcher = matcher
+
+      return config, matcher, False
 
   raise AppConfigNotFoundError(
       'Could not find app.yaml in "%s".' % (root_path,))
@@ -3402,6 +3434,7 @@ def SetupStubs(app_id, **config):
     prospective_search_path: Path to the file to store Prospective Search stub
         data in.
     use_sqlite: Use the SQLite stub for the datastore.
+    auto_id_policy: How datastore stub assigns IDs, sequential or scattered.
     high_replication: Use the high replication consistency model
     history_path: DEPRECATED, No-op.
     clear_datastore: If the datastore should be cleared on startup.
@@ -3421,8 +3454,7 @@ def SetupStubs(app_id, **config):
       they are enqueued.
     task_retry_seconds: How long to wait after an auto-running task before it
       is tried again.
-    persist_logs: True if request and application logs should be persisted for
-      later access.
+    logs_path: Path to the file to store the logs data in.
     trusted: True if this app can access data belonging to other apps.  This
       behavior is different from the real app server and should be left False
       except for advanced uses of dev_appserver.
@@ -3430,7 +3462,7 @@ def SetupStubs(app_id, **config):
     address: The host that this dev_appsever is running on. Defaults to
       localhost.
     search_index_path: Path to the file to store search indexes in.
-    clear_search_index: If the search indeces should be cleared on startup.
+    clear_search_index: If the search indices should be cleared on startup.
   """
 
 
@@ -3444,6 +3476,7 @@ def SetupStubs(app_id, **config):
   prospective_search_path = config.get('prospective_search_path', '')
   clear_prospective_search = config.get('clear_prospective_search', False)
   use_sqlite = config.get('use_sqlite', False)
+  auto_id_policy = config.get('auto_id_policy', datastore_stub_util.SEQUENTIAL)
   high_replication = config.get('high_replication', False)
   require_indexes = config.get('require_indexes', False)
   mysql_host = config.get('mysql_host', None)
@@ -3460,7 +3493,7 @@ def SetupStubs(app_id, **config):
   remove = config.get('remove', os.remove)
   disable_task_running = config.get('disable_task_running', False)
   task_retry_seconds = config.get('task_retry_seconds', 30)
-  persist_logs = config.get('persist_logs', False)
+  logs_path = config.get('logs_path', ':memory:')
   trusted = config.get('trusted', False)
   serve_port = config.get('port', 8080)
   serve_address = config.get('address', 'localhost')
@@ -3490,7 +3523,14 @@ def SetupStubs(app_id, **config):
     _RemoveFile(search_index_path)
 
 
-  if not multiprocess.GlobalProcess().MaybeConfigureRemoteDataApis():
+  if multiprocess.GlobalProcess().MaybeConfigureRemoteDataApis():
+
+
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'logservice',
+        logservice_stub.LogServiceStub(logs_path=':memory:'))
+  else:
 
 
 
@@ -3507,10 +3547,6 @@ def SetupStubs(app_id, **config):
         'capability_service',
         capability_stub.CapabilityServiceStub())
 
-    apiproxy_stub_map.apiproxy.RegisterStub(
-        'conversion',
-        conversion_stub.ConversionServiceStub())
-
     if use_sqlite:
       if port_sqlite_data:
         try:
@@ -3520,20 +3556,27 @@ def SetupStubs(app_id, **config):
           raise
 
       datastore = datastore_sqlite_stub.DatastoreSqliteStub(
-            app_id, datastore_path, require_indexes=require_indexes,
-            trusted=trusted, root_path=root_path,
-            use_atexit=_use_atexit_for_datastore_stub)
+          app_id, datastore_path, require_indexes=require_indexes,
+          trusted=trusted, root_path=root_path,
+          use_atexit=_use_atexit_for_datastore_stub,
+          auto_id_policy=auto_id_policy)
     else:
+      logging.warning(FILE_STUB_DEPRECATION_MESSAGE)
       datastore = datastore_file_stub.DatastoreFileStub(
           app_id, datastore_path, require_indexes=require_indexes,
           trusted=trusted, root_path=root_path,
-          use_atexit=_use_atexit_for_datastore_stub)
+          use_atexit=_use_atexit_for_datastore_stub,
+          auto_id_policy=auto_id_policy)
 
     if high_replication:
       datastore.SetConsistencyPolicy(
           datastore_stub_util.TimeBasedHRConsistencyPolicy())
     apiproxy_stub_map.apiproxy.ReplaceStub(
         'datastore_v3', datastore)
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'datastore_v4',
+        datastore_v4_stub.DatastoreV4Stub(app_id))
 
     apiproxy_stub_map.apiproxy.RegisterStub(
         'mail',
@@ -3563,6 +3606,10 @@ def SetupStubs(app_id, **config):
     apiproxy_stub_map.apiproxy.RegisterStub(
         'xmpp',
         xmpp_service_stub.XmppServiceStub())
+
+    apiproxy_stub_map.apiproxy.RegisterStub(
+        'logservice',
+        logservice_stub.LogServiceStub(logs_path=logs_path))
 
 
 
@@ -3599,12 +3646,12 @@ def SetupStubs(app_id, **config):
           apiproxy_stub_map.apiproxy.GetStub('taskqueue')))
 
   apiproxy_stub_map.apiproxy.RegisterStub(
+      'remote_socket',
+      _remote_socket_stub.RemoteSocketServiceStub())
+
+  apiproxy_stub_map.apiproxy.RegisterStub(
       'search',
       simple_search_stub.SearchServiceStub(index_file=search_index_path))
-
-
-
-
 
 
 
@@ -3633,10 +3680,6 @@ def SetupStubs(app_id, **config):
   apiproxy_stub_map.apiproxy.RegisterStub(
       'file',
       file_service_stub.FileServiceStub(blob_storage))
-
-  apiproxy_stub_map.apiproxy.RegisterStub(
-      'logservice',
-      logservice_stub.LogServiceStub(persist_logs))
 
   system_service_stub = system_stub.SystemServiceStub()
   multiprocess.GlobalProcess().UpdateSystemStub(system_service_stub)
@@ -3843,8 +3886,8 @@ def CreateServer(root_path,
                  python_path_list=sys.path,
                  sdk_dir=SDK_ROOT,
                  default_partition=None,
-                 persist_logs=False,
-                 frontend_port=None):
+                 frontend_port=None,
+                 interactive_console=True):
   """Creates a new HTTPServer for an application.
 
   The sdk_dir argument must be specified for the directory storing all code for
@@ -3864,13 +3907,14 @@ def CreateServer(root_path,
     python_path_list: Used for dependency injection.
     sdk_dir: Directory where the SDK is stored.
     default_partition: Default partition to use for the appid.
-    persist_logs: If true, log records should be durably persisted.
     frontend_port: A frontend port (so backends can return an address for a
       frontend). If None, port will be used.
+    interactive_console: Whether to add the interactive console.
 
   Returns:
     Instance of BaseHTTPServer.HTTPServer that's ready to start accepting.
   """
+
 
 
 
@@ -3885,7 +3929,7 @@ def CreateServer(root_path,
                                        login_url,
                                        static_caching,
                                        default_partition,
-                                       persist_logs)
+                                       interactive_console)
 
 
   if absolute_root_path not in python_path_list:
@@ -3904,12 +3948,8 @@ def CreateServer(root_path,
   if queue_stub and hasattr(queue_stub, 'StartBackgroundExecution'):
       queue_stub.StartBackgroundExecution()
 
-
-  channel_stub = apiproxy_stub_map.apiproxy.GetStub('channel')
-  if channel_stub:
-    channel_stub._add_event = server.AddEvent
-    channel_stub._update_event = server.UpdateEvent
-
+  request_info._local_dispatcher = DevAppserverDispatcher(server,
+                                                          frontend_port or port)
   server.frontend_hostport = '%s:%d' % (serve_address or 'localhost',
                                         frontend_port or port)
 
@@ -4001,7 +4041,7 @@ class HTTPServerWithScheduler(BaseHTTPServer.HTTPServer):
 
   def UpdateEvent(self, service, event_id, eta):
     """Update a runnable event in the heap with a new eta.
-    TODO(moishel): come up with something better than a linear scan to
+    TODO: come up with something better than a linear scan to
     update items. For the case this is used for now -- updating events to
     "time out" channels -- this works fine because those events are always
     soon (within seconds) and thus found quickly towards the front of the heap.
@@ -4039,3 +4079,141 @@ class HttpServerWithMultiProcess(HTTPServerWithScheduler):
   def process_request(self, request, client_address):
     """Overrides the SocketServer process_request call."""
     multiprocess.GlobalProcess().ProcessRequest(request, client_address)
+
+
+class FakeRequestSocket(object):
+  """A socket object to fake an HTTP request."""
+
+  def __init__(self, method, relative_url, headers, body):
+    payload = cStringIO.StringIO()
+    payload.write('%s %s HTTP/1.1\r\n' % (method, relative_url))
+    payload.write('Content-Length: %d\r\n' % len(body))
+    for key, value in headers:
+      payload.write('%s: %s\r\n' % (key, value))
+    payload.write('\r\n')
+    payload.write(body)
+    self.rfile = cStringIO.StringIO(payload.getvalue())
+    self.wfile = StringIO.StringIO()
+    self.wfile_close = self.wfile.close
+    self.wfile.close = self.connection_done
+
+  def connection_done(self):
+    self.wfile_close()
+
+  def makefile(self, mode, buffsize):
+    if mode.startswith('w'):
+      return self.wfile
+    else:
+      return self.rfile
+
+  def close(self):
+    pass
+
+  def shutdown(self, how):
+    pass
+
+
+class DevAppserverDispatcher(request_info._LocalFakeDispatcher):
+  """A dev_appserver Dispatcher implementation."""
+
+  def __init__(self, server, port):
+    self._server = server
+    self._port = port
+
+  def add_event(self, runnable, eta, service=None, event_id=None):
+    """Add a callable to be run at the specified time.
+
+    Args:
+      runnable: A callable object to call at the specified time.
+      eta: An int containing the time to run the event, in seconds since the
+          epoch.
+      service: A str containing the name of the service that owns this event.
+          This should be set if event_id is set.
+      event_id: A str containing the id of the event. If set, this can be passed
+          to update_event to change the time at which the event should run.
+    """
+    self._server.AddEvent(eta, runnable, service, event_id)
+
+  def update_event(self, eta, service, event_id):
+    """Update the eta of a scheduled event.
+
+    Args:
+      eta: An int containing the time to run the event, in seconds since the
+          epoch.
+      service: A str containing the name of the service that owns this event.
+      event_id: A str containing the id of the event to update.
+    """
+    self._server.UpdateEvent(service, event_id, eta)
+
+  def add_async_request(self, method, relative_url, headers, body, source_ip,
+                        server_name=None, version=None, instance_id=None):
+    """Dispatch an HTTP request asynchronously.
+
+    Args:
+      method: A str containing the HTTP method of the request.
+      relative_url: A str containing path and query string of the request.
+      headers: A list of (key, value) tuples where key and value are both str.
+      body: A str containing the request body.
+      source_ip: The source ip address for the request.
+      server_name: An optional str containing the server name to service this
+          request. If unset, the request will be dispatched to the default
+          server.
+      version: An optional str containing the version to service this request.
+          If unset, the request will be dispatched to the default version.
+      instance_id: An optional str containing the instance_id of the instance to
+          service this request. If unset, the request will be dispatched to
+          according to the load-balancing for the server and version.
+    """
+    fake_socket = FakeRequestSocket(method, relative_url, headers, body)
+    self._server.AddEvent(0, lambda: (fake_socket, (source_ip, self._port)))
+
+  def add_request(self, method, relative_url, headers, body, source_ip,
+                  server_name=None, version=None, instance_id=None):
+    """Process an HTTP request.
+
+    Args:
+      method: A str containing the HTTP method of the request.
+      relative_url: A str containing path and query string of the request.
+      headers: A list of (key, value) tuples where key and value are both str.
+      body: A str containing the request body.
+      source_ip: The source ip address for the request.
+      server_name: An optional str containing the server name to service this
+          request. If unset, the request will be dispatched to the default
+          server.
+      version: An optional str containing the version to service this request.
+          If unset, the request will be dispatched to the default version.
+      instance_id: An optional str containing the instance_id of the instance to
+          service this request. If unset, the request will be dispatched to
+          according to the load-balancing for the server and version.
+
+    Returns:
+      A request_info.ResponseTuple containing the response information for the
+      HTTP request.
+    """
+    try:
+      header_dict = wsgiref.headers.Headers(headers)
+      connection_host = header_dict.get('host')
+      connection = httplib.HTTPConnection(connection_host)
+
+
+      connection.putrequest(
+          method, relative_url,
+          skip_host='host' in header_dict,
+          skip_accept_encoding='accept-encoding' in header_dict)
+
+      for header_key, header_value in headers:
+        connection.putheader(header_key, header_value)
+      connection.endheaders()
+      connection.send(body)
+
+      response = connection.getresponse()
+      response.read()
+      response.close()
+
+      return request_info.ResponseTuple(
+          '%d %s' % (response.status, response.reason), [], '')
+    except (httplib.HTTPException, socket.error):
+      logging.exception(
+          'An error occured while sending a %s request to "%s%s"',
+          method, connection_host, relative_url)
+      return request_info.ResponseTuple('0', [], '')
