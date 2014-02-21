@@ -41,6 +41,8 @@ class SearchServiceError(ProtocolBuffer.ProtocolMessage):
   TRANSIENT_ERROR =    2
   INTERNAL_ERROR =    3
   PERMISSION_DENIED =    4
+  TIMEOUT      =    5
+  CONCURRENT_TRANSACTION =    6
 
   _ErrorCode_NAMES = {
     0: "OK",
@@ -48,6 +50,8 @@ class SearchServiceError(ProtocolBuffer.ProtocolMessage):
     2: "TRANSIENT_ERROR",
     3: "INTERNAL_ERROR",
     4: "PERMISSION_DENIED",
+    5: "TIMEOUT",
+    6: "CONCURRENT_TRANSACTION",
   }
 
   def ErrorCode_Name(cls, x): return cls._ErrorCode_NAMES.get(x, "")
@@ -280,6 +284,19 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
   def Source_Name(cls, x): return cls._Source_NAMES.get(x, "")
   Source_Name = classmethod(Source_Name)
 
+
+
+  PRIORITY     =    0
+  BACKGROUND   =    1
+
+  _Mode_NAMES = {
+    0: "PRIORITY",
+    1: "BACKGROUND",
+  }
+
+  def Mode_Name(cls, x): return cls._Mode_NAMES.get(x, "")
+  Mode_Name = classmethod(Mode_Name)
+
   has_name_ = 0
   name_ = ""
   has_consistency_ = 0
@@ -290,6 +307,8 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
   version_ = 0
   has_source_ = 0
   source_ = 0
+  has_mode_ = 0
+  mode_ = 0
 
   def __init__(self, contents=None):
     if contents is not None: self.MergeFromString(contents)
@@ -359,6 +378,19 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
 
   def has_source(self): return self.has_source_
 
+  def mode(self): return self.mode_
+
+  def set_mode(self, x):
+    self.has_mode_ = 1
+    self.mode_ = x
+
+  def clear_mode(self):
+    if self.has_mode_:
+      self.has_mode_ = 0
+      self.mode_ = 0
+
+  def has_mode(self): return self.has_mode_
+
 
   def MergeFrom(self, x):
     assert x is not self
@@ -367,6 +399,7 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     if (x.has_namespace()): self.set_namespace(x.namespace())
     if (x.has_version()): self.set_version(x.version())
     if (x.has_source()): self.set_source(x.source())
+    if (x.has_mode()): self.set_mode(x.mode())
 
   def Equals(self, x):
     if x is self: return 1
@@ -380,6 +413,8 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     if self.has_version_ and self.version_ != x.version_: return 0
     if self.has_source_ != x.has_source_: return 0
     if self.has_source_ and self.source_ != x.source_: return 0
+    if self.has_mode_ != x.has_mode_: return 0
+    if self.has_mode_ and self.mode_ != x.mode_: return 0
     return 1
 
   def IsInitialized(self, debug_strs=None):
@@ -397,6 +432,7 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     if (self.has_namespace_): n += 1 + self.lengthString(len(self.namespace_))
     if (self.has_version_): n += 1 + self.lengthVarInt64(self.version_)
     if (self.has_source_): n += 1 + self.lengthVarInt64(self.source_)
+    if (self.has_mode_): n += 1 + self.lengthVarInt64(self.mode_)
     return n + 1
 
   def ByteSizePartial(self):
@@ -408,6 +444,7 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     if (self.has_namespace_): n += 1 + self.lengthString(len(self.namespace_))
     if (self.has_version_): n += 1 + self.lengthVarInt64(self.version_)
     if (self.has_source_): n += 1 + self.lengthVarInt64(self.source_)
+    if (self.has_mode_): n += 1 + self.lengthVarInt64(self.mode_)
     return n
 
   def Clear(self):
@@ -416,6 +453,7 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     self.clear_namespace()
     self.clear_version()
     self.clear_source()
+    self.clear_mode()
 
   def OutputUnchecked(self, out):
     out.putVarInt32(10)
@@ -432,6 +470,9 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     if (self.has_source_):
       out.putVarInt32(40)
       out.putVarInt32(self.source_)
+    if (self.has_mode_):
+      out.putVarInt32(48)
+      out.putVarInt32(self.mode_)
 
   def OutputPartial(self, out):
     if (self.has_name_):
@@ -449,6 +490,9 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     if (self.has_source_):
       out.putVarInt32(40)
       out.putVarInt32(self.source_)
+    if (self.has_mode_):
+      out.putVarInt32(48)
+      out.putVarInt32(self.mode_)
 
   def TryMerge(self, d):
     while d.avail() > 0:
@@ -468,6 +512,9 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
       if tt == 40:
         self.set_source(d.getVarInt32())
         continue
+      if tt == 48:
+        self.set_mode(d.getVarInt32())
+        continue
 
 
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
@@ -481,6 +528,7 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     if self.has_namespace_: res+=prefix+("namespace: %s\n" % self.DebugFormatString(self.namespace_))
     if self.has_version_: res+=prefix+("version: %s\n" % self.DebugFormatInt32(self.version_))
     if self.has_source_: res+=prefix+("source: %s\n" % self.DebugFormatInt32(self.source_))
+    if self.has_mode_: res+=prefix+("mode: %s\n" % self.DebugFormatInt32(self.mode_))
     return res
 
 
@@ -492,6 +540,7 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
   knamespace = 3
   kversion = 4
   ksource = 5
+  kmode = 6
 
   _TEXT = _BuildTagLookupTable({
     0: "ErrorCode",
@@ -500,7 +549,8 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     3: "namespace",
     4: "version",
     5: "source",
-  }, 5)
+    6: "mode",
+  }, 6)
 
   _TYPES = _BuildTagLookupTable({
     0: ProtocolBuffer.Encoder.NUMERIC,
@@ -509,7 +559,8 @@ class IndexSpec(ProtocolBuffer.ProtocolMessage):
     3: ProtocolBuffer.Encoder.STRING,
     4: ProtocolBuffer.Encoder.NUMERIC,
     5: ProtocolBuffer.Encoder.NUMERIC,
-  }, 5, ProtocolBuffer.Encoder.MAX_TYPE)
+    6: ProtocolBuffer.Encoder.NUMERIC,
+  }, 6, ProtocolBuffer.Encoder.MAX_TYPE)
 
 
   _STYLE = """"""
@@ -676,9 +727,11 @@ class IndexDocumentParams(ProtocolBuffer.ProtocolMessage):
 
 
   SYNCHRONOUSLY =    0
+  WHEN_CONVENIENT =    1
 
   _Freshness_NAMES = {
     0: "SYNCHRONOUSLY",
+    1: "WHEN_CONVENIENT",
   }
 
   def Freshness_Name(cls, x): return cls._Freshness_NAMES.get(x, "")
@@ -3827,7 +3880,7 @@ class SearchParams(ProtocolBuffer.ProtocolMessage):
   has_limit_ = 0
   limit_ = 20
   has_matched_count_accuracy_ = 0
-  matched_count_accuracy_ = 100
+  matched_count_accuracy_ = 0
   has_scorer_spec_ = 0
   scorer_spec_ = None
   has_field_spec_ = 0
@@ -3925,7 +3978,7 @@ class SearchParams(ProtocolBuffer.ProtocolMessage):
   def clear_matched_count_accuracy(self):
     if self.has_matched_count_accuracy_:
       self.has_matched_count_accuracy_ = 0
-      self.matched_count_accuracy_ = 100
+      self.matched_count_accuracy_ = 0
 
   def has_matched_count_accuracy(self): return self.has_matched_count_accuracy_
 
@@ -4717,7 +4770,7 @@ class SearchResult(ProtocolBuffer.ProtocolMessage):
   _STYLE = """"""
   _STYLE_CONTENT_TYPE = """"""
   _PROTO_DESCRIPTOR_NAME = 'apphosting.SearchResult'
-class SearchResponse(ProtocolBuffer.ProtocolMessage):
+class SearchResponse(_ExtendableProtocolMessage):
   has_matched_count_ = 0
   matched_count_ = 0
   has_status_ = 0
@@ -4725,6 +4778,8 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
   cursor_ = ""
 
   def __init__(self, contents=None):
+    if _extension_runtime:
+      self._extension_fields = {}
     self.result_ = []
     self.status_ = RequestStatus()
     if contents is not None: self.MergeFromString(contents)
@@ -4786,6 +4841,7 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
     if (x.has_matched_count()): self.set_matched_count(x.matched_count())
     if (x.has_status()): self.mutable_status().MergeFrom(x.status())
     if (x.has_cursor()): self.set_cursor(x.cursor())
+    if _extension_runtime: self._MergeExtensionFields(x)
 
   def Equals(self, x):
     if x is self: return 1
@@ -4798,6 +4854,7 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
     if self.has_status_ and self.status_ != x.status_: return 0
     if self.has_cursor_ != x.has_cursor_: return 0
     if self.has_cursor_ and self.cursor_ != x.cursor_: return 0
+    if _extension_runtime and not self._ExtensionEquals(x): return 0
     return 1
 
   def IsInitialized(self, debug_strs=None):
@@ -4822,6 +4879,8 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
     n += self.lengthVarInt64(self.matched_count_)
     n += self.lengthString(self.status_.ByteSize())
     if (self.has_cursor_): n += 1 + self.lengthString(len(self.cursor_))
+    if _extension_runtime:
+      n += self._ExtensionByteSize(False)
     return n + 2
 
   def ByteSizePartial(self):
@@ -4835,6 +4894,8 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
       n += 1
       n += self.lengthString(self.status_.ByteSizePartial())
     if (self.has_cursor_): n += 1 + self.lengthString(len(self.cursor_))
+    if _extension_runtime:
+      n += self._ExtensionByteSize(True)
     return n
 
   def Clear(self):
@@ -4842,8 +4903,12 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
     self.clear_matched_count()
     self.clear_status()
     self.clear_cursor()
+    if _extension_runtime: self._extension_fields.clear()
 
   def OutputUnchecked(self, out):
+    if _extension_runtime:
+      extensions = self._ListExtensions()
+      extension_index = 0
     for i in xrange(len(self.result_)):
       out.putVarInt32(10)
       out.putVarInt32(self.result_[i].ByteSize())
@@ -4856,8 +4921,13 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
     if (self.has_cursor_):
       out.putVarInt32(34)
       out.putPrefixedString(self.cursor_)
+    if _extension_runtime:
+      extension_index = self._OutputExtensionFields(out, False, extensions, extension_index, 10000)
 
   def OutputPartial(self, out):
+    if _extension_runtime:
+      extensions = self._ListExtensions()
+      extension_index = 0
     for i in xrange(len(self.result_)):
       out.putVarInt32(10)
       out.putVarInt32(self.result_[i].ByteSizePartial())
@@ -4872,6 +4942,8 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
     if (self.has_cursor_):
       out.putVarInt32(34)
       out.putPrefixedString(self.cursor_)
+    if _extension_runtime:
+      extension_index = self._OutputExtensionFields(out, True, extensions, extension_index, 10000)
 
   def TryMerge(self, d):
     while d.avail() > 0:
@@ -4894,6 +4966,10 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
       if tt == 34:
         self.set_cursor(d.getPrefixedString())
         continue
+      if _extension_runtime:
+        if (1000 <= tt and tt < 10000):
+          self._ParseOneExtensionField(tt, d)
+          continue
 
 
       if (tt == 0): raise ProtocolBuffer.ProtocolBufferDecodeError
@@ -4916,8 +4992,12 @@ class SearchResponse(ProtocolBuffer.ProtocolMessage):
       res+=self.status_.__str__(prefix + "  ", printElemNumber)
       res+=prefix+">\n"
     if self.has_cursor_: res+=prefix+("cursor: %s\n" % self.DebugFormatString(self.cursor_))
+    if _extension_runtime:
+      res+=self._ExtensionDebugString(prefix, printElemNumber)
     return res
 
+  if _extension_runtime:
+    _extensions_by_field_number = {}
 
   def _BuildTagLookupTable(sparse, maxtag, default=None):
     return tuple([sparse.get(i, default) for i in xrange(0, 1+maxtag)])

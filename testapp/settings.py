@@ -8,6 +8,8 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/dev/ref/settings/
 """
 
+from djangae.settings_base import *
+
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 import os
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -30,10 +32,11 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = (
-    'django.contrib.admin',
-    'django.contrib.auth',
+#    'django.contrib.admin',
+#    'djangae.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
+    'django.contrib.sites',
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django.contrib.humanize',
@@ -51,7 +54,7 @@ MIDDLEWARE_CLASSES = (
 )
 
 ROOT_URLCONF = 'testapp.urls'
-
+SITE_ID = 1
 WSGI_APPLICATION = 'testapp.wsgi.application'
 
 

@@ -48,15 +48,14 @@ MAX_REQUEST_SIZE = 32 << 20
 class MailServiceStub(apiproxy_stub.APIProxyStub):
   """Python only mail service stub.
 
-  This stub does not actually attempt to send email.  instead it merely logs
-  a description of the email to the developers console.
-
   Args:
     host: Host of SMTP server to use.  Blank disables sending SMTP.
     port: Port of SMTP server to use.
     user: User to log in to SMTP server as.
     password: Password for SMTP server user.
   """
+
+  THREADSAFE = True
 
   def __init__(self,
                host=None,
@@ -228,7 +227,7 @@ class MailServiceStub(apiproxy_stub.APIProxyStub):
       for to in ('To', 'Cc', 'Bcc'):
         if mime_message[to]:
           tos.extend("'%s'" % addr.strip().replace("'", r"'\''")
-                     for addr in mime_message[to].split(','))
+                     for addr in unicode(mime_message[to]).split(','))
 
       command = '%s %s' % (sendmail_command, ' '.join(tos))
 

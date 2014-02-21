@@ -166,6 +166,9 @@ class RemoteStub(object):
   You can use this to stub out any service that the remote server supports.
   """
 
+
+  _local = threading.local()
+
   def __init__(self, server, path, _test_stub_map=None):
     """Constructs a new RemoteStub that communicates with the specified server.
 
@@ -198,16 +201,25 @@ class RemoteStub(object):
     finally:
       self._PostHookHandler(service, call, request, response)
 
+  @classmethod
+  def _GetRequestId(cls):
+    """Returns the id of the request associated with the current thread."""
+    return cls._local.request_id
+
+  @classmethod
+  def _SetRequestId(cls, request_id):
+    """Set the id of the request associated with the current thread."""
+    cls._local.request_id = request_id
+
   def _MakeRealSyncCall(self, service, call, request, response):
     request_pb = remote_api_pb.Request()
     request_pb.set_service_name(service)
     request_pb.set_method(call)
     request_pb.set_request(request.Encode())
-    if _REQUEST_ID_HEADER in os.environ:
+    if hasattr(self._local, 'request_id'):
 
 
-
-      request_pb.set_request_id(os.environ[_REQUEST_ID_HEADER])
+      request_pb.set_request_id(self._local.request_id)
 
     response_pb = remote_api_pb.Response()
     encoded_request = request_pb.Encode()
@@ -556,7 +568,7 @@ def GetRemoteAppIdFromServer(server, path, remote_token=None):
   response = server.Send(path, payload=None, **urlargs)
   if not response.startswith('{'):
     raise ConfigurationError(
-        'Invalid response recieved from server: %s' % response)
+        'Invalid response received from server: %s' % response)
   app_info = yaml.load(response)
   if not app_info or 'rtok' not in app_info or 'app_id' not in app_info:
     raise ConfigurationError('Error parsing app_id lookup response')
