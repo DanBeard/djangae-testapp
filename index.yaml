@@ -17,6 +17,20 @@ indexes:
 
 - kind: auth_user
   properties:
+  - name: __key__
+  - name: date_joined
+  - name: email
+  - name: first_name
+  - name: is_active
+  - name: is_staff
+  - name: is_superuser
+  - name: last_login
+  - name: last_name
+  - name: password
+  - name: username
+
+- kind: auth_user
+  properties:
   - name: date_joined
   - name: email
   - name: first_name
