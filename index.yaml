@@ -15,6 +15,13 @@ indexes:
   - name: codename
   - name: content_type_id
 
+- kind: auth_permission
+  properties:
+  - name: username
+  - name: codename
+  - name: content_type_id
+  - name: name
+
 - kind: auth_user
   properties:
   - name: __key__
@@ -67,8 +74,18 @@ indexes:
   - name: app
   - name: name
 
+- kind: django_session
+  properties:
+  - name: __key__
+  - name: expire_date
+
 - kind: django_site
   properties:
   - name: __key__
+  - name: domain
+  - name: name
+
+- kind: django_site
+  properties:
   - name: domain
   - name: name

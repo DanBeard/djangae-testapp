@@ -1,3 +1,5 @@
+auth_customuser:
+  email: [iexact]
 auth_user:
   email: [iexact]
   username: [iexact]
