@@ -41,7 +41,8 @@ INSTALLED_APPS = (
     'django.contrib.staticfiles',
     'django.contrib.humanize',
     'django.contrib.formtools',
-    'djangae'
+    'djangae',
+    'testapp'
 )
 
 MIDDLEWARE_CLASSES = (
