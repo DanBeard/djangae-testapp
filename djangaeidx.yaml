@@ -5,3 +5,5 @@ auth_user:
   username: [iexact]
 djangae_user:
   username: [iexact]
+model_forms_post:
+  posted: [day, year, month]
