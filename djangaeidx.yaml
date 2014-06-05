@@ -4,7 +4,7 @@ auth_user:
   email: [iexact]
   username: [iexact]
 basic_article:
-  pub_date: [year]
+  pub_date: [year, month, day, week_day]
 djangae_user:
   username: [iexact]
 model_forms_post:
