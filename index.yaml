@@ -63,10 +63,101 @@ indexes:
   - name: password
   - name: username
 
+- kind: centaur_error
+  properties:
+  - name: __key__
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: last_event
+  - name: level
+  - name: line_number
+  - name: summary
+
+- kind: centaur_error
+  properties:
+  - name: __key__
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: last_event
+  - name: line_number
+  - name: summary
+
+- kind: centaur_error
+  properties:
+  - name: __key__
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: line_number
+  - name: summary
+
+- kind: centaur_error
+  properties:
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: last_event
+  - name: level
+  - name: line_number
+  - name: summary
+
+- kind: centaur_error
+  properties:
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: last_event
+  - name: line_number
+  - name: summary
+
+- kind: centaur_error
+  properties:
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: line_number
+  - name: summary
+
+- kind: centaur_error
+  properties:
+  - name: last_event
+    direction: desc
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: level
+  - name: line_number
+  - name: summary
+
+- kind: centaur_error
+  properties:
+  - name: last_event
+    direction: desc
+  - name: event_count
+  - name: exception_class_name
+  - name: file_path
+  - name: is_resolved
+  - name: line_number
+  - name: summary
+
 - kind: django_content_type
   properties:
   - name: app_label
   - name: model
+  - name: name
+
+- kind: django_content_type
+  properties:
+  - name: app_label
   - name: name
 
 - kind: django_migrations

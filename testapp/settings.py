@@ -34,6 +34,7 @@ ALLOWED_HOSTS = []
 INSTALLED_APPS = (
     'django.contrib.admin',
     'django.contrib.auth',
+    'djangae.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.sites',
@@ -87,6 +88,6 @@ USE_TZ = False
 
 STATIC_URL = '/static/'
 
-
+AUTH_USER_MODEL = 'djangae.User'
 GENERATE_SPECIAL_INDEXES_DURING_TESTING = True
 COMPLETE_FLUSH_WHILE_TESTING = True
