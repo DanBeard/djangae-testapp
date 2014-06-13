@@ -10,9 +10,9 @@ from .django_model_tests.get_or_create.tests import *
 from .django_model_tests.get_or_create.models import *
 from .django_model_tests.basic.tests import *
 from .django_model_tests.basic.models import *
-#from .django_model_tests.custom_managers.tests import *
-#from .django_model_tests.custom_managers.models import *
-#from .django_model_tests.custom_pk.tests import *
-#from .django_model_tests.custom_pk.models import *
-#from .django_model_tests.delete.tests import *
-#from .django_model_tests.delete.models import *
+from .django_model_tests.custom_managers.tests import *
+from .django_model_tests.custom_managers.models import *
+from .django_model_tests.custom_pk.tests import *
+from .django_model_tests.custom_pk.models import *
+from .django_model_tests.delete.tests import *
+from .django_model_tests.delete.models import *
