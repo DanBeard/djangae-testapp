@@ -16,3 +16,15 @@ from .django_model_tests.custom_pk.tests import *
 from .django_model_tests.custom_pk.models import *
 from .django_model_tests.delete.tests import *
 from .django_model_tests.delete.models import *
+from .django_model_tests.one_to_one.tests import *
+from .django_model_tests.one_to_one.models import *
+from .django_model_tests.proxy_models.tests import *
+from .django_model_tests.proxy_models.models import *
+from .django_model_tests.timezones.tests import *
+from .django_model_tests.timezones.models import *
+from .django_model_tests.update.tests import *
+from .django_model_tests.update.models import *
+from .django_model_tests.update_only_fields.tests import *
+from .django_model_tests.update_only_fields.models import *
+from .django_model_tests.ordering.tests import *
+from .django_model_tests.ordering.models import *
