@@ -18,8 +18,8 @@ handlers:
 - url: /media
   static_dir: static/media/
 
-- url: /media/admin
-  static_dir: django/contrib/admin/media
+- url: /static/admin
+  static_dir: static/admin
   expiration: '0'
 
 - url: /.*
@@ -31,4 +31,3 @@ skip_files:
 - (\..*)
 - (app\.yaml)
 - (index\.yaml)
-

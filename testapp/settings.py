@@ -86,6 +86,7 @@ USE_TZ = False
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/dev/howto/static-files/
 
+STATIC_ROOT = BASE_DIR + 'static'
 STATIC_URL = '/static/'
 
 AUTH_USER_MODEL = 'djangae.User'

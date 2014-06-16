@@ -10,6 +10,12 @@ indexes:
 # automatically uploaded to the admin console when you next deploy
 # your application using appcfg.py.
 
+- kind: auth_group
+  properties:
+  - name: name
+  - name: pk
+    direction: desc
+
 - kind: auth_permission
   properties:
   - name: codename
@@ -170,6 +176,12 @@ indexes:
   - name: __key__
   - name: expire_date
 
+- kind: django_session
+  ancestor: yes
+  properties:
+  - name: __key__
+  - name: expire_date
+
 - kind: django_site
   properties:
   - name: __key__
@@ -180,3 +192,9 @@ indexes:
   properties:
   - name: domain
   - name: name
+
+- kind: django_site
+  properties:
+  - name: domain
+  - name: pk
+    direction: desc
