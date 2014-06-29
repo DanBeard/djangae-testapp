@@ -90,7 +90,8 @@ class GoApplication(object):
     """Return the environment that used be used to run the Go executable."""
     environ = {'GOROOT': _GOROOT,
                'PWD': self._module_configuration.application_root,
-               'TZ': 'UTC'}
+               'TZ': 'UTC',
+               'RUN_WITH_DEVAPPSERVER': '1'}
     if 'SYSTEMROOT' in os.environ:
       environ['SYSTEMROOT'] = os.environ['SYSTEMROOT']
     if 'USER' in os.environ:
@@ -192,8 +193,8 @@ class GoApplication(object):
     gab_stdout, gab_stderr = gab_process.communicate()
     if gab_process.returncode:
       raise BuildError(
-          '%s\n\n(Executed command: %s)' % (gab_stderr,
-                                            ' '.join(gab_args)))
+          '(Executed command: %s)\n\n%s' % (' '.join(gab_args),
+                                            gab_stderr))
     else:
       return gab_stdout
 
@@ -211,9 +212,9 @@ class GoApplication(object):
     gab_stdout, gab_stderr = gab_process.communicate()
     if gab_process.returncode:
       raise BuildError(
-          '%s\n%s\n\n(Executed command: %s)' % (gab_stdout,
-                                                gab_stderr,
-                                                ' '.join(gab_args)))
+          '(Executed command: %s)\n\n%s\n%s' % (' '.join(gab_args),
+                                                gab_stdout,
+                                                gab_stderr))
     else:
       logging.debug('Build succeeded:\n%s\n%s', gab_stdout, gab_stderr)
       self._go_executable = os.path.join(self._work_dir, '_go_app')
@@ -226,6 +227,11 @@ class GoApplication(object):
           or the GOPATH have changed since the last call to maybe_build, False
           otherwise. This argument is used to decide whether a build is Required
           or not.
+
+    Returns:
+      True if compilation was successfully performed (will raise
+        an exception if compilation was attempted but failed).
+      False if compilation was not attempted.
 
     Raises:
       BuildError: if building the executable fails for any reason.
@@ -240,7 +246,7 @@ class GoApplication(object):
       raise BuildError('Required Go components are missing from the SDK.')
 
     if self._go_executable and not maybe_modified_since_last_build:
-      return
+      return False
 
     (self._go_file_to_mtime,
      old_go_file_to_mtime) = (self._get_go_files_to_mtime(),
@@ -256,7 +262,7 @@ class GoApplication(object):
     if (self._go_executable and
         self._go_file_to_mtime == old_go_file_to_mtime and
         self._extras_hash == old_extras_hash):
-      return
+      return False
 
     if self._go_file_to_mtime != old_go_file_to_mtime:
       logging.debug('Rebuilding Go application due to source modification')
@@ -265,3 +271,4 @@ class GoApplication(object):
     else:
       logging.debug('Building Go application')
     self._build()
+    return True

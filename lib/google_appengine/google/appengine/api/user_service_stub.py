@@ -80,7 +80,7 @@ class UserServiceStub(apiproxy_stub.APIProxyStub):
     self._logout_url = logout_url
     self.__scopes = None
 
-    self.SetOAuthUser()
+    self.SetOAuthUser(is_admin=(os.environ.get('OAUTH_IS_ADMIN', '0') == '1'))
 
 
 
@@ -199,8 +199,14 @@ class UserServiceStub(apiproxy_stub.APIProxyStub):
     if host and protocol:
       return continue_url
 
-    protocol, host, _, _, _, _ = urlparse.urlparse(
-        self.request_data.get_request_url(request_id))
+    try:
+      protocol, host, _, _, _, _ = urlparse.urlparse(
+          self.request_data.get_request_url(request_id))
+    except KeyError:
+
+
+
+      pass
 
 
     if path == '':

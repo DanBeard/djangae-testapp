@@ -22,6 +22,7 @@ import threading
 import urlparse
 import wsgiref.headers
 
+from google.appengine.api import appinfo
 from google.appengine.api import request_info
 from google.appengine.tools.devappserver2 import constants
 from google.appengine.tools.devappserver2 import instance
@@ -38,6 +39,10 @@ _THREAD_POOL = thread_executor.ThreadExecutor()
 
 ResponseTuple = collections.namedtuple('ResponseTuple',
                                        ['status', 'headers', 'content'])
+
+# This must be kept in sync with dispatch_ah_url_path_prefix_whitelist in
+# google/production/borg/apphosting/templates/frontend.borg.
+DISPATCH_AH_URL_PATH_PREFIX_WHITELIST = ('/_ah/queue/deferred',)
 
 
 class PortRegistry(object):
@@ -70,11 +75,13 @@ class Dispatcher(request_info.Dispatcher):
                php_config,
                python_config,
                cloud_sql_config,
+               vm_config,
                module_to_max_instances,
                use_mtime_file_watcher,
                automatic_restart,
                allow_skipped_files,
                module_to_threadsafe_override):
+
     """Initializer for Dispatcher.
 
     Args:
@@ -96,6 +103,9 @@ class Dispatcher(request_info.Dispatcher):
       cloud_sql_config: A runtime_config_pb2.CloudSQL instance containing the
           required configuration for local Google Cloud SQL development. If None
           then Cloud SQL will not be available.
+      vm_config: A runtime_config_pb2.VMConfig instance containing
+          VM runtime-specific configuration. If vm_config does not have
+          docker_daemon_url specified all docker-related stuff is disabled.
       module_to_max_instances: A mapping between a module name and the maximum
           number of instances that can be created (this overrides the settings
           found in the configuration argument) e.g.
@@ -109,13 +119,14 @@ class Dispatcher(request_info.Dispatcher):
           are readable, even if they appear in a static handler or "skip_files"
           directive.
       module_to_threadsafe_override: A mapping between the module name and what
-        to override the module's YAML threadsafe configuration (so modules
-        not named continue to use their YAML configuration).
+          to override the module's YAML threadsafe configuration (so modules
+          not named continue to use their YAML configuration).
     """
     self._configuration = configuration
     self._php_config = php_config
     self._python_config = python_config
     self._cloud_sql_config = cloud_sql_config
+    self._vm_config = vm_config
     self._request_data = None
     self._api_host = None
     self._api_port = None
@@ -223,6 +234,7 @@ class Dispatcher(request_info.Dispatcher):
                    self._php_config,
                    self._python_config,
                    self._cloud_sql_config,
+                   self._vm_config,
                    self._port,
                    self._port_registry,
                    self._request_data,
@@ -232,6 +244,7 @@ class Dispatcher(request_info.Dispatcher):
                    self._automatic_restart,
                    self._allow_skipped_files,
                    threadsafe_override)
+
     if module_configuration.manual_scaling:
       _module = module.ManualScalingModule(*module_args)
     elif module_configuration.basic_scaling:
@@ -370,7 +383,7 @@ class Dispatcher(request_info.Dispatcher):
       request_info.VersionDoesNotExistError: The version doesn't exist.
     """
     if not module_name:
-      module_name = 'default'
+      module_name = appinfo.DEFAULT_MODULE
     if module_name not in self._module_name_to_module:
       raise request_info.ModuleDoesNotExistError()
     if (version is not None and
@@ -398,8 +411,8 @@ class Dispatcher(request_info.Dispatcher):
       request_info.VersionDoesNotExistError: The version doesn't exist.
     """
     if not module_name or module_name not in self._module_name_to_module:
-      if 'default' in self._module_name_to_module:
-        module_name = 'default'
+      if appinfo.DEFAULT_MODULE in self._module_name_to_module:
+        module_name = appinfo.DEFAULT_MODULE
       elif self._module_name_to_module:
         # If there is no default module, but there are other modules, take any.
         # This is somewhat of a hack, and can be removed if we ever enforce the
@@ -446,8 +459,8 @@ class Dispatcher(request_info.Dispatcher):
     """
     return self._get_module(module_name, version).get_num_instances()
 
-  def start_module(self, module_name, version):
-    """Starts a module.
+  def start_version(self, module_name, version):
+    """Starts a version of a module.
 
     Args:
       module_name: A str containing the name of the module.
@@ -461,8 +474,8 @@ class Dispatcher(request_info.Dispatcher):
     """
     self._get_module(module_name, version).resume()
 
-  def stop_module(self, module_name, version):
-    """Stops a module.
+  def stop_version(self, module_name, version):
+    """Stops a version of a module.
 
     Args:
       module_name: A str containing the name of the module.
@@ -688,9 +701,26 @@ class Dispatcher(request_info.Dispatcher):
     return self._handle_request(
         environ, start_response, self._module_for_request(environ['PATH_INFO']))
 
+  def _should_use_dispatch_config(self, path):
+    """Determines whether or not to use the dispatch config.
+
+    Args:
+      path: The request path.
+    Returns:
+      A Boolean indicating whether or not to use the rules in dispatch config.
+    """
+    if (not path.startswith('/_ah/') or
+        any(path.startswith(wl) for wl
+            in DISPATCH_AH_URL_PATH_PREFIX_WHITELIST)):
+      return True
+    else:
+      logging.warning('Skipping dispatch.yaml rules because %s is not a '
+                      'dispatchable path.', path)
+      return False
+
   def _module_for_request(self, path):
     dispatch = self._configuration.dispatch
-    if dispatch:
+    if dispatch and self._should_use_dispatch_config(path):
       for url, module_name in dispatch.dispatch:
         if (url.path_exact and path == url.path or
             not url.path_exact and path.startswith(url.path)):

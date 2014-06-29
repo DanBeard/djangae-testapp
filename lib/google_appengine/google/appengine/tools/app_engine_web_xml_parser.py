@@ -165,10 +165,7 @@ class AppEngineWebXmlParser(object):
     for sub_node in xml_parser_utils.GetNodes(node, 'include'):
       path = xml_parser_utils.GetAttribute(sub_node, 'path').strip()
       expiration = xml_parser_utils.GetAttribute(sub_node, 'expiration').strip()
-      static_file_include = StaticFileInclude()
-      static_file_include.pattern = path
-      static_file_include.expiration = expiration
-      static_file_include.http_headers = {}
+      static_file_include = StaticFileInclude(path, expiration, {})
 
       for http_header_node in xml_parser_utils.GetNodes(
           sub_node, 'http-header'):
@@ -265,10 +262,11 @@ class AppEngineWebXmlParser(object):
 
   def ProcessWarmupRequestsEnabledNode(self, node):
     warmup_requests_enabled = xml_parser_utils.BooleanValue(node.text)
+    warmup_service = AppEngineWebXml.WARMUP_SERVICE
     if warmup_requests_enabled:
-      self.inbound_services.add(self.WARMUP_SERVICE)
+      self.app_engine_web_xml.inbound_services.add(warmup_service)
     else:
-      self.inbound_services.remove(self.WARMUP_SERVICE)
+      self.app_engine_web_xml.inbound_services.remove(warmup_service)
 
   def ProcessThreadsafeNode(self, node):
     value = xml_parser_utils.BooleanValue(node.text)
@@ -278,8 +276,8 @@ class AppEngineWebXmlParser(object):
   def ProcessCodeLockNode(self, node):
     self.app_engine_web_xml.codelock = xml_parser_utils.BooleanValue(node.text)
 
-  def ProcessUseVmNode(self, node):
-    self.app_engine_web_xml.use_vm = xml_parser_utils.BooleanValue(node.text)
+  def ProcessVmNode(self, node):
+    self.app_engine_web_xml.vm = xml_parser_utils.BooleanValue(node.text)
 
   def ProcessApiConfigNode(self, node):
     servlet = xml_parser_utils.GetAttribute(node, 'servlet-class').strip()
@@ -401,7 +399,7 @@ class AppEngineWebXml(ValueMixin):
     self.threadsafe = False
     self.threadsafe_value_provided = False
     self.codelock = None
-    self.use_vm = False
+    self.vm = False
     self.api_config = None
     self.api_endpoint_ids = []
     self.pagespeed = None
@@ -555,4 +553,8 @@ class PrioritySpecifierEntry(ValueMixin):
 
 class StaticFileInclude(ValueMixin):
   """Instances describe static files to be included in app configuration."""
-  pass
+
+  def __init__(self, pattern, expiration, http_headers):
+    self.pattern = pattern
+    self.expiration = expiration
+    self.http_headers = http_headers

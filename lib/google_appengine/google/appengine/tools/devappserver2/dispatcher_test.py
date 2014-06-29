@@ -48,7 +48,7 @@ class ModuleConfigurationStub(object):
     self.application = application
     self.module_name = module_name
     self.major_version = version
-    self.version_id = '%s.%s' % (version, '12345')
+    self.version_id = '%s:%s.%s' % (module_name, version, '12345')
     self.runtime = 'python27'
     self.threadsafe = False
     self.handlers = []
@@ -100,6 +100,7 @@ class AutoScalingModuleFacade(module.AutoScalingModule):
         php_config=None,
         python_config=None,
         cloud_sql_config=None,
+        unused_vm_config=None,
         default_version_port=8080,
         port_registry=None,
         request_data=None,
@@ -141,6 +142,7 @@ class ManualScalingModuleFacade(module.ManualScalingModule):
         php_config=None,
         python_config=None,
         cloud_sql_config=None,
+        vm_config=None,
         default_version_port=8080,
         port_registry=None,
         request_data=None,
@@ -171,6 +173,34 @@ class ManualScalingModuleFacade(module.ManualScalingModule):
     return '%s:%s' % (self._host, int(instance) + 1000)
 
 
+def _make_dispatcher(app_config):
+  """Make a new dispatcher with the given ApplicationConfigurationStub."""
+  return dispatcher.Dispatcher(
+      app_config,
+      'localhost',
+      1,
+      'gmail.com',
+      1,
+      php_config=None,
+      python_config=None,
+      cloud_sql_config=None,
+      vm_config=None,
+      module_to_max_instances={},
+      use_mtime_file_watcher=False,
+      automatic_restart=True,
+      allow_skipped_files=False,
+      module_to_threadsafe_override={})
+
+
+class DispatcherQuitWithoutStartTest(unittest.TestCase):
+
+  def test_quit_without_start(self):
+    """Test that calling quit on a dispatcher without calling start is safe."""
+    app_config = ApplicationConfigurationStub(MODULE_CONFIGURATIONS)
+    unstarted_dispatcher = _make_dispatcher(app_config)
+    unstarted_dispatcher.quit()
+
+
 class DispatcherTest(unittest.TestCase):
 
   def setUp(self):
@@ -178,20 +208,7 @@ class DispatcherTest(unittest.TestCase):
     api_server.test_setup_stubs()
     self.dispatch_config = DispatchConfigurationStub()
     app_config = ApplicationConfigurationStub(MODULE_CONFIGURATIONS)
-    self.dispatcher = dispatcher.Dispatcher(
-        app_config,
-        'localhost',
-        1,
-        'gmail.com',
-        1,
-        php_config=None,
-        python_config=None,
-        cloud_sql_config=None,
-        module_to_max_instances={},
-        use_mtime_file_watcher=False,
-        automatic_restart=True,
-        allow_skipped_files=False,
-        module_to_threadsafe_override={})
+    self.dispatcher = _make_dispatcher(app_config)
     self.module1 = AutoScalingModuleFacade(app_config.modules[0],
                                            balanced_port=1,
                                            host='localhost')
@@ -437,6 +454,22 @@ class DispatcherTest(unittest.TestCase):
                      self.dispatcher._module_for_request('/other_path'))
     self.assertEqual('default',
                      self.dispatcher._module_for_request('/undispatched'))
+
+  def test_should_use_dispatch_config(self):
+    """Tests the _should_use_dispatch_config method."""
+    self.assertTrue(self.dispatcher._should_use_dispatch_config('/'))
+    self.assertTrue(self.dispatcher._should_use_dispatch_config('/foo/'))
+    self.assertTrue(self.dispatcher._should_use_dispatch_config(
+        '/_ah/queue/deferred'))
+    self.assertTrue(self.dispatcher._should_use_dispatch_config(
+        '/_ah/queue/deferred/blah'))
+
+    self.assertFalse(self.dispatcher._should_use_dispatch_config('/_ah/'))
+    self.assertFalse(self.dispatcher._should_use_dispatch_config('/_ah/foo/'))
+    self.assertFalse(self.dispatcher._should_use_dispatch_config(
+        '/_ah/foo/bar/'))
+    self.assertFalse(self.dispatcher._should_use_dispatch_config(
+        '/_ah/queue/'))
 
   def test_resolve_target(self):
     servr = object()

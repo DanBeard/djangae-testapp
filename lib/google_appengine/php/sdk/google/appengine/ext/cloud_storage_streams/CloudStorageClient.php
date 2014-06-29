@@ -22,21 +22,15 @@
 
 namespace google\appengine\ext\cloud_storage_streams;
 
-require_once 'google/appengine/api/app_identity/AppIdentityService.php';
-require_once 'google/appengine/api/cloud_storage/CloudStorageTools.php';
-require_once 'google/appengine/api/urlfetch_service_pb.php';
-require_once 'google/appengine/ext/cloud_storage_streams/HttpResponse.php';
-require_once 'google/appengine/runtime/ApiProxy.php';
-require_once 'google/appengine/runtime/ApplicationError.php';
-require_once 'google/appengine/util/array_util.php';
-
 use google\appengine\api\app_identity\AppIdentityService;
 use google\appengine\api\app_identity\AppIdentityException;
 use google\appengine\api\cloud_storage\CloudStorageTools;
 use google\appengine\runtime\ApiProxy;
 use google\appengine\runtime\ApplicationError;
 use google\appengine\URLFetchRequest\RequestMethod;
-use google\appengine\util as util;
+use google\appengine\URLFetchServiceError\ErrorCode;
+use google\appengine\util\ArrayUtil;
+use google\appengine\util\StringUtil;
 
 /**
  * CloudStorageClient provides default fail implementations for all of the
@@ -45,6 +39,23 @@ use google\appengine\util as util;
  * perform.
  */
 abstract class CloudStorageClient {
+  /**
+   * Headers that may be controlled by the user through the stream context.
+   */
+  protected static $METADATA_HEADERS = [
+    'Cache-Control',
+    'Content-Disposition',
+    'Content-Encoding',
+    'Content-Language',
+    'Content-Type',
+    // x-goog-meta-* handled separately.
+  ];
+
+  /**
+   * Prefix for all metadata headers used when parsing and rendering.
+   */
+  const METADATA_HEADER_PREFIX = 'x-goog-meta-';
+
   // The default chunk size that we will read from the file. This value should
   // remain smaller than the maximum object size valid for memcache writes so
   // we can cache the reads.
@@ -52,6 +63,11 @@ abstract class CloudStorageClient {
 
   // The default amount of time that reads will be held in the cache.
   const DEFAULT_READ_CACHE_EXPIRY_SECONDS = 3600;  // one hour
+
+  // The default maximum number of times that certain (see retryable_statuses)
+  // failed Google Cloud Storage requests will be retried before returning
+  // failure.
+  const DEFAULT_MAXIMUM_NUMBER_OF_RETRIES = 2;
 
   // The default time the writable state of a bucket will be cached for.
   const DEFAULT_WRITABLE_CACHE_EXPIRY_SECONDS = 600;  // ten minutes
@@ -135,6 +151,11 @@ abstract class CloudStorageClient {
                                          HttpResponse::SERVICE_UNAVAILABLE,
                                          HttpResponse::GATEWAY_TIMEOUT];
 
+  protected static $retry_exception_codes = [
+      ErrorCode::DEADLINE_EXCEEDED,
+      ErrorCode::FETCH_ERROR,
+      ErrorCode::INTERNAL_TRANSIENT_ERROR];
+
   // Values that are allowed to be supplied as ACLs when writing objects.
   protected static $valid_acl_values = ["private",
                                         "public-read",
@@ -155,9 +176,18 @@ abstract class CloudStorageClient {
       "PATCH" => RequestMethod::PATCH
   ];
 
+  private static $retryable_statuses = [
+      408,  // Request Timeout
+      500,  // Internal Server Error
+      502,  // Bad Gateway
+      503,  // Service Unavailable
+      504,  // Gateway Timeout
+  ];
+
   private static $default_gs_context_options = [
       "enable_cache" => true,
       "enable_optimistic_cache" => false,
+      "max_retries" => self::DEFAULT_MAXIMUM_NUMBER_OF_RETRIES,
       "read_cache_expiry_seconds" => self::DEFAULT_READ_CACHE_EXPIRY_SECONDS,
       "writable_cache_expiry_seconds" =>
           self::DEFAULT_WRITABLE_CACHE_EXPIRY_SECONDS,
@@ -190,8 +220,8 @@ abstract class CloudStorageClient {
     } else {
       $this->context_options = self::$default_gs_context_options;
     }
-    $this->anonymous = util\findByKeyOrNull($this->context_options,
-                                            "anonymous");
+    $this->anonymous = ArrayUtil::findByKeyOrNull($this->context_options,
+                                                  "anonymous");
 
     $this->url = $this->createObjectUrl($bucket, $object);
   }
@@ -244,6 +274,24 @@ abstract class CloudStorageClient {
   }
 
   public function write($data) {
+    return false;
+  }
+
+  /**
+   * Subclass can override this method to return the metadata of the underlying
+   * GCS object.
+   */
+  public function getMetaData() {
+    trigger_error(sprintf("%s does not have metadata", get_class($this)));
+    return false;
+  }
+
+  /**
+   * Subclass can override this method to return the MIME content type of the
+   * underlying GCS object.
+   */
+  public function getContentType() {
+    trigger_error(sprintf("%s does not have content type", get_class($this)));
     return false;
   }
 
@@ -335,7 +383,6 @@ abstract class CloudStorageClient {
    * @return The value of the header if found, false otherwise.
    */
   protected function getHeaderValue($header_name, $headers) {
-    // Could be more than one header, in which case we keep an array.
     foreach($headers as $key => $value) {
       if (strcasecmp($key, $header_name) === 0) {
         return $value;
@@ -364,13 +411,37 @@ abstract class CloudStorageClient {
 
     $resp = new \google\appengine\URLFetchResponse();
 
-    try {
-      ApiProxy::makeSyncCall('urlfetch', 'Fetch', $req, $resp);
-    } catch (ApplicationError $e) {
-      syslog(LOG_ERR,
-             sprintf("Call to URLFetch failed with application error %d.",
-                     $e->getApplicationError()));
-      return false;
+    for ($num_retries = 0; ; $num_retries++) {
+      try {
+        ApiProxy::makeSyncCall('urlfetch', 'Fetch', $req, $resp);
+      } catch (ApplicationError $e) {
+        if (in_array($e->getApplicationError(), self::$retry_exception_codes)) {
+          // We need to set a plausible value in the URLFetchResponse proto in
+          // case the retry loop falls through - this will also cause a retry
+          // if one is available.
+          $resp->setStatusCode(HttpResponse::GATEWAY_TIMEOUT);
+        } else {
+          syslog(LOG_ERR,
+                 sprintf("Call to URLFetch failed with application error %d " .
+                         "for url %s.",
+                         $e->getApplicationError(),
+                         $url));
+          return false;
+        }
+      }
+
+      $status_code = $resp->getStatusCode();
+
+      if ($num_retries < $this->context_options['max_retries'] &&
+          in_array($status_code, self::$retryable_statuses) &&
+          (connection_status() & CONNECTION_TIMEOUT) == 0) {
+        usleep(rand(0, 1000000 * pow(2, $num_retries)));
+        if ((connection_status() & CONNECTION_TIMEOUT) == CONNECTION_TIMEOUT) {
+          break;
+        }
+      } else {
+        break;
+      }
     }
 
     $response_headers = [];
@@ -410,6 +481,30 @@ abstract class CloudStorageClient {
     }
 
     return $result;
+  }
+
+  /**
+   * Extract metadata from HTTP response headers.
+   *
+   * Finds all headers that begin with METADATA_HEADER_PREFIX (x-goog-meta-),
+   * strips off the prefix, and creates an associative array.
+   *
+   * @param array $headers
+   *   Associative array of HTTP headers.
+   * @return array
+   *   Array of parsed metadata headers.
+   */
+  protected static function extractMetaData(array $headers) {
+    $metadata = [];
+    foreach($headers as $key => $value) {
+      if (StringUtil::startsWith(strtolower($key),
+                                 static::METADATA_HEADER_PREFIX)) {
+        $metadata_key = substr($key, strlen(static::METADATA_HEADER_PREFIX));
+        $metadata[$metadata_key] = $value;
+      }
+    }
+
+    return $metadata;
   }
 
   /**

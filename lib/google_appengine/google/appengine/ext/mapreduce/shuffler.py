@@ -460,15 +460,9 @@ class _HashingBlobstoreOutputWriter(output_writers.BlobstoreOutputWriterBase):
     return {"filenames": self._filenames}
 
   @classmethod
-  def create(cls, mapreduce_state, shard_state):
-    """Create new writer for a shard.
-
-    Args:
-      mapreduce_state: an instance of model.MapreduceState describing current
-      job. State can be modified.
-      shard_state: shard state.
-    """
-    return cls(mapreduce_state.writer_state["filenames"])
+  def create(cls, mr_spec, shard_number, shard_attempt, _writer_state=None):
+    """Inherit docs."""
+    return cls(_writer_state["filenames"])
 
   @classmethod
   def get_filenames(cls, mapreduce_state):
@@ -712,17 +706,14 @@ class ShufflePipeline(pipeline_base.PipelineBase):
   """
 
   def run(self, job_name, filenames, shards=None):
-    if files.shuffler.available():
-      yield _ShuffleServicePipeline(job_name, filenames)
-    else:
-      hashed_files = yield _HashPipeline(job_name, filenames, shards=shards)
-      sorted_files = yield _SortChunksPipeline(job_name, hashed_files)
-      temp_files = [hashed_files, sorted_files]
+    hashed_files = yield _HashPipeline(job_name, filenames, shards=shards)
+    sorted_files = yield _SortChunksPipeline(job_name, hashed_files)
+    temp_files = [hashed_files, sorted_files]
 
-      merged_files = yield _MergePipeline(job_name, sorted_files)
+    merged_files = yield _MergePipeline(job_name, sorted_files)
 
-      with pipeline.After(merged_files):
-        all_temp_files = yield pipeline_common.Extend(*temp_files)
-        yield mapper_pipeline._CleanupPipeline(all_temp_files)
+    with pipeline.After(merged_files):
+      all_temp_files = yield pipeline_common.Extend(*temp_files)
+      yield mapper_pipeline._CleanupPipeline(all_temp_files)
 
-      yield pipeline_common.Return(merged_files)
+    yield pipeline_common.Return(merged_files)

@@ -21,8 +21,6 @@
 
 namespace google\appengine\ext\cloud_storage_streams;
 
-require_once 'google/appengine/ext/cloud_storage_streams/CloudStorageClient.php';
-
 /**
  * Client for deleting objects from Google Cloud Storage.
  */
@@ -80,17 +78,65 @@ final class CloudStorageRenameClient extends CloudStorageClient {
       return false;
     }
 
-    $from_etag = $this->getHeaderValue('ETag', $http_response['headers']);
-    $content_type = $this->getHeaderValue('Content-Type',
-                                          $http_response['headers']);
-
     $copy_headers = [
-        'x-goog-copy-source' =>
-            sprintf("/%s%s", $this->from_bucket, $this->from_object),
-        'x-goog-copy-source-if-match' => $from_etag,
-        'content-type' => $content_type,
-        'x-goog-metadata-directive' => 'COPY',
+      'x-goog-copy-source' =>
+        sprintf("/%s%s", $this->from_bucket, $this->from_object),
+      'x-goog-copy-source-if-match' =>
+        $this->getHeaderValue('ETag', $http_response['headers']),
     ];
+
+    // TODO: b/13132830: Remove once feature releases.
+    if (!ini_get('google_app_engine.enable_additional_cloud_storage_headers')) {
+      foreach (static::$METADATA_HEADERS as $key) {
+        // Leave Content-Type since it has been supported.
+        if ($key != 'Content-Type') {
+          unset($this->context_options[$key]);
+        }
+      }
+    }
+
+    // Check if any metadata context options have been set and only copy values
+    // below if one option needs to be changed.
+    $is_meta = isset($this->context_options['metadata']);
+    foreach (static::$METADATA_HEADERS as $key) {
+      // Stop after first meta option found.
+      $is_meta = $is_meta ?: isset($this->context_options[$key]);
+      if ($is_meta) {
+        break;
+      }
+    }
+
+    // Metadata-directive applies to headers outside of x-goog-meta-* like
+    // Content-Type. If any metadata changes are included in context then all
+    // other meta data must be filled in since the metadata-directive will be
+    // set to REPLACE and non-passed in values should remain the same.
+    if ($is_meta) {
+      $copy_headers['x-goog-metadata-directive'] = 'REPLACE';
+
+      // Copy all meta data fields to preserve values when using REPLACE
+      // directive. If a value exists in context_options it is given preference.
+      foreach (static::$METADATA_HEADERS as $key) {
+        if (isset($this->context_options[$key])) {
+          $copy_headers[$key] = $this->context_options[$key];
+        } else {
+          $value = $this->getHeaderValue($key, $http_response['headers']);
+          if ($value !== null) {
+            $copy_headers[$key] = $value;
+          }
+        }
+      }
+
+      // Special case since metadata option converts to multiple headers, this
+      // also handles copying over previous values if no new ones speicified.
+      $metadata = isset($this->context_options['metadata']) ?
+        $this->context_options['metadata'] :
+        static::extractMetaData($http_response['headers']);
+      foreach ($metadata as $key => $value) {
+        $copy_headers['x-goog-meta-' . $key] = $value;
+      }
+    } else {
+      $copy_headers['x-goog-metadata-directive'] = 'COPY';
+    }
 
     if (array_key_exists("acl", $this->context_options)) {
       $acl = $this->context_options["acl"];

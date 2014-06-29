@@ -43,11 +43,10 @@ from google.appengine.tools.devappserver2 import blob_image
 from google.appengine.tools.devappserver2 import blob_upload
 from google.appengine.tools.devappserver2 import channel
 from google.appengine.tools.devappserver2 import constants
-
 from google.appengine.tools.devappserver2 import endpoints
 from google.appengine.tools.devappserver2 import errors
 from google.appengine.tools.devappserver2 import file_watcher
-from google.appengine.tools.devappserver2 import gcs_application
+from google.appengine.tools.devappserver2 import gcs_server
 from google.appengine.tools.devappserver2 import go_runtime
 from google.appengine.tools.devappserver2 import http_runtime_constants
 from google.appengine.tools.devappserver2 import instance
@@ -65,6 +64,7 @@ from google.appengine.tools.devappserver2 import static_files_handler
 from google.appengine.tools.devappserver2 import thread_executor
 from google.appengine.tools.devappserver2 import url_handler
 from google.appengine.tools.devappserver2 import util
+from google.appengine.tools.devappserver2 import vm_runtime_proxy
 from google.appengine.tools.devappserver2 import wsgi_handler
 from google.appengine.tools.devappserver2 import wsgi_server
 
@@ -92,6 +92,18 @@ _REQUEST_LOGGING_BLACKLIST_RE = re.compile(
 _EMPTY_MATCH = re.match('', '')
 _DUMMY_URLMAP = appinfo.URLMap(script='/')
 _SHUTDOWN_TIMEOUT = 30
+
+_MAX_UPLOAD_MEGABYTES = 32
+_MAX_UPLOAD_BYTES = _MAX_UPLOAD_MEGABYTES * 1024 * 1024
+_MAX_UPLOAD_NO_TRIGGER_BAD_CLIENT_BYTES = 64 * 1024 * 1024
+
+_REDIRECT_HTML = '''\
+<HTML><HEAD><meta http-equiv="content-type" content="%(content-type)s">
+<TITLE>%(status)d Moved</TITLE></HEAD>
+<BODY><H1>%(status)d Moved</H1>
+The document has moved'
+<A HREF="%(correct-url)s">here</A>.
+</BODY></HTML>'''
 
 
 def _static_files_regex_from_handlers(handlers):
@@ -144,11 +156,12 @@ class Module(object):
   """The abstract base for all instance pool implementations."""
 
   _RUNTIME_INSTANCE_FACTORIES = {
-
       'go': go_runtime.GoRuntimeInstanceFactory,
       'php': php_runtime.PHPRuntimeInstanceFactory,
       'python': python_runtime.PythonRuntimeInstanceFactory,
       'python27': python_runtime.PythonRuntimeInstanceFactory,
+      # TODO: uncomment for GA.
+      # 'vm': vm_runtime_proxy.VMRuntimeInstanceFactory,
   }
   if java_runtime:
     _RUNTIME_INSTANCE_FACTORIES.update({
@@ -210,9 +223,9 @@ class Module(object):
     handlers.append(
         wsgi_handler.WSGIHandler(channel.application, url_pattern))
 
-    url_pattern = '/%s' % gcs_application.GCS_URL_PATTERN
+    url_pattern = '/%s' % gcs_server.GCS_URL_PATTERN
     handlers.append(
-        wsgi_handler.WSGIHandler(gcs_application.Application(), url_pattern))
+        wsgi_handler.WSGIHandler(gcs_server.Application(), url_pattern))
 
     url_pattern = '/%s' % endpoints.API_SERVING_PATTERN
     handlers.append(
@@ -265,9 +278,6 @@ class Module(object):
     runtime_config = runtime_config_pb2.Config()
     runtime_config.app_id = self._module_configuration.application
     runtime_config.version_id = self._module_configuration.version_id
-    if self._module_configuration.module_name:
-      runtime_config.version_id = '%s:%s' % (
-          self._module_configuration.module_name, runtime_config.version_id)
     if self._threadsafe_override is None:
       runtime_config.threadsafe = self._module_configuration.threadsafe or False
     else:
@@ -300,6 +310,9 @@ class Module(object):
     if (self._python_config and
         self._module_configuration.runtime.startswith('python')):
       runtime_config.python_config.CopyFrom(self._python_config)
+
+    if self._vm_config:
+      runtime_config.vm_config.CopyFrom(self._vm_config)
 
     return runtime_config
 
@@ -364,6 +377,7 @@ class Module(object):
                php_config,
                python_config,
                cloud_sql_config,
+               vm_config,
                default_version_port,
                port_registry,
                request_data,
@@ -374,7 +388,6 @@ class Module(object):
                allow_skipped_files,
                threadsafe_override):
     """Initializer for Module.
-
     Args:
       module_configuration: An application_configuration.ModuleConfiguration
           instance storing the configuration data for a module.
@@ -397,6 +410,9 @@ class Module(object):
       cloud_sql_config: A runtime_config_pb2.CloudSQL instance containing the
           required configuration for local Google Cloud SQL development. If None
           then Cloud SQL will not be available.
+      vm_config: A runtime_config_pb2.VMConfig instance containing
+          VM runtime-specific configuration. If None all docker-related stuff
+          is disabled.
       default_version_port: An int containing the port of the default version.
       port_registry: A dispatcher.PortRegistry used to provide the Dispatcher
           with a mapping of port to Module and Instance.
@@ -427,6 +443,7 @@ class Module(object):
     self._php_config = php_config
     self._python_config = python_config
     self._cloud_sql_config = cloud_sql_config
+    self._vm_config = vm_config
     self._request_data = request_data
     self._allow_skipped_files = allow_skipped_files
     self._threadsafe_override = threadsafe_override
@@ -436,6 +453,11 @@ class Module(object):
     self._use_mtime_file_watcher = use_mtime_file_watcher
     self._default_version_port = default_version_port
     self._port_registry = port_registry
+
+    # TODO: remove when GA.
+    if self._vm_config and self._vm_config.HasField('docker_daemon_url'):
+      self._RUNTIME_INSTANCE_FACTORIES['vm'] = (
+          vm_runtime_proxy.VMRuntimeInstanceFactory)
 
     self._instance_factory = self._create_instance_factory(
         self._module_configuration)
@@ -589,7 +611,7 @@ class Module(object):
             user_request_id=environ['REQUEST_LOG_ID'],
             ip=environ.get('REMOTE_ADDR', ''),
             app_id=self._module_configuration.application,
-            version_id=self._module_configuration.version_id,
+            version_id=self._module_configuration.major_version,
             nickname=email.split('@', 1)[0],
             user_agent=environ.get('HTTP_USER_AGENT', ''),
             host=hostname,
@@ -617,18 +639,45 @@ class Module(object):
                         'content_length': content_length or '-'})
         return start_response(status, response_headers, exc_info)
 
+      content_length = int(environ.get('CONTENT_LENGTH', '0'))
+
       if (environ['REQUEST_METHOD'] in ('GET', 'HEAD', 'TRACE') and
-          int(environ.get('CONTENT_LENGTH') or '0') != 0):
+          content_length != 0):
         # CONTENT_LENGTH may be empty or absent.
         wrapped_start_response('400 Bad Request', [])
         return ['"%s" requests may not contain bodies.' %
                 environ['REQUEST_METHOD']]
 
+      # Do not apply request limits to internal _ah handlers (known to break
+      # blob uploads).
+      # TODO: research if _ah handlers need limits.
+      if (not environ.get('REQUEST_URI', '/').startswith('/_ah/') and
+          content_length > _MAX_UPLOAD_BYTES):
+        # As allowed by the RFC, cherrypy closes the connection for 413 errors.
+        # Most clients do not handle this correctly and treat the page as
+        # unavailable if the connection is closed before the client can send
+        # all the data. To match the behavior of production, for large files
+        # < 64M read the data to prevent the client bug from being triggered.
+
+        if content_length <= _MAX_UPLOAD_NO_TRIGGER_BAD_CLIENT_BYTES:
+          environ['wsgi.input'].read(content_length)
+        status = '%d %s' % (httplib.REQUEST_ENTITY_TOO_LARGE,
+                            httplib.responses[httplib.REQUEST_ENTITY_TOO_LARGE])
+        wrapped_start_response(status, [])
+        return ['Upload limited to %d megabytes.' % _MAX_UPLOAD_MEGABYTES]
+
       with self._handler_lock:
         handlers = self._handlers
 
       try:
-        request_url = environ['PATH_INFO']
+        path_info = environ['PATH_INFO']
+        path_info_normal = self._normpath(path_info)
+        if path_info_normal != path_info:
+          # While a 301 Moved Permanently makes more sense for non-normal
+          # paths, prod issues a 302 so we do the same.
+          return self._redirect_302_path_info(path_info_normal,
+                                              environ,
+                                              wrapped_start_response)
         if request_type in (instance.BACKGROUND_REQUEST,
                             instance.INTERACTIVE_REQUEST,
                             instance.SHUTDOWN_REQUEST):
@@ -641,7 +690,7 @@ class Module(object):
           return request_rewriter.frontend_rewriter_middleware(app)(
               environ, wrapped_start_response)
         for handler in handlers:
-          match = handler.match(request_url)
+          match = handler.match(path_info)
           if match:
             auth_failure = handler.handle_authorization(environ,
                                                         wrapped_start_response)
@@ -662,7 +711,7 @@ class Module(object):
         return self._no_handler_for_request(environ, wrapped_start_response,
                                             request_id)
       except StandardError, e:
-        logging.exception('Request to %r failed', request_url)
+        logging.exception('Request to %r failed', path_info)
         wrapped_start_response('500 Internal Server Error', [], e)
         return []
 
@@ -686,6 +735,81 @@ class Module(object):
       self._quit_event.wait(time_to_wait)
       inst.quit(force=True)
 
+  @staticmethod
+  def _quote_querystring(qs):
+    """Quote a query string to protect against XSS."""
+
+    parsed_qs = urlparse.parse_qs(qs, keep_blank_values=True)
+    # urlparse.parse returns a dictionary with values as lists while
+    # urllib.urlencode does not handle those. Expand to a list of
+    # key values.
+    expanded_qs = []
+    for key, multivalue in parsed_qs.items():
+      for value in multivalue:
+        expanded_qs.append((key, value))
+    return urllib.urlencode(expanded_qs)
+
+  def _redirect_302_path_info(self, updated_path_info, environ, start_response):
+    """Redirect to an updated path.
+
+    Respond to the current request with a 302 Found status with an updated path
+    but preserving the rest of the request.
+
+    Notes:
+    - WSGI does not make the fragment available so we are not able to preserve
+      it. Luckily prod does not preserve the fragment so it works out.
+
+    Args:
+      updated_path_info: the new HTTP path to redirect to.
+      environ: WSGI environ object.
+      start_response: WSGI start response callable.
+
+    Returns:
+      WSGI-compatible iterable object representing the body of the response.
+    """
+    correct_url = urlparse.urlunsplit(
+        (environ['wsgi.url_scheme'],
+         environ['HTTP_HOST'],
+         urllib.quote(updated_path_info),
+         self._quote_querystring(environ['QUERY_STRING']),
+         None))
+
+    content_type = 'text/html; charset=utf-8'
+    output = _REDIRECT_HTML % {
+        'content-type': content_type,
+        'status': httplib.FOUND,
+        'correct-url': correct_url
+    }
+
+    start_response('%d %s' % (httplib.FOUND, httplib.responses[httplib.FOUND]),
+                   [('Content-Type', content_type),
+                    ('Location', correct_url),
+                    ('Content-Length', str(len(output)))])
+    return output
+
+  @staticmethod
+  def _normpath(path):
+    """Normalize the path by handling . and .. directory entries.
+
+    Normalizes the path. A directory entry of . is just dropped while a
+    directory entry of .. removes the previous entry. Note that unlike
+    os.path.normpath, redundant separators remain in place to match prod.
+
+    Args:
+      path: an HTTP path.
+
+    Returns:
+      A normalized HTTP path.
+    """
+    normalized_path_entries = []
+    for entry in path.split('/'):
+      if entry == '..':
+        if normalized_path_entries:
+          normalized_path_entries.pop()
+      elif entry != '.':
+        normalized_path_entries.append(entry)
+    return '/'.join(normalized_path_entries)
+
   def _insert_log_message(self, message, level, request_id):
     logs_group = log_service_pb.UserAppLogGroup()
     log_line = logs_group.add_log_line()
@@ -704,7 +828,7 @@ class Module(object):
 
     Returns:
       A string suitable for use as a REQUEST_LOG_ID. The returned string is
-      variable length to emulate the the production values, which encapsulate
+      variable length to emulate the production values, which encapsulate
       the application id, version and some log state.
     """
     return ''.join(random.choice(_LOWER_HEX_DIGITS)
@@ -721,6 +845,8 @@ class Module(object):
 
     Args:
       instances: An int containing the number of instances to run.
+    Raises:
+      request_info.NotSupportedWithAutoScalingError: Always.
     """
     raise request_info.NotSupportedWithAutoScalingError()
 
@@ -765,6 +891,7 @@ class Module(object):
                                       self._php_config,
                                       self._python_config,
                                       self._cloud_sql_config,
+                                      self._vm_config,
                                       self._default_version_port,
                                       self._port_registry,
                                       self._request_data,
@@ -868,6 +995,7 @@ class AutoScalingModule(Module):
                php_config,
                python_config,
                cloud_sql_config,
+               unused_vm_config,
                default_version_port,
                port_registry,
                request_data,
@@ -901,6 +1029,9 @@ class AutoScalingModule(Module):
       cloud_sql_config: A runtime_config_pb2.CloudSQL instance containing the
           required configuration for local Google Cloud SQL development. If None
           then Cloud SQL will not be available.
+      unused_vm_config: A runtime_config_pb2.VMConfig instance containing
+          VM runtime-specific configuration. Ignored by AutoScalingModule as
+          autoscaling is not yet supported by VM runtimes.
       default_version_port: An int containing the port of the default version.
       port_registry: A dispatcher.PortRegistry used to provide the Dispatcher
           with a mapping of port to Module and Instance.
@@ -930,6 +1061,9 @@ class AutoScalingModule(Module):
                                             php_config,
                                             python_config,
                                             cloud_sql_config,
+                                            # VM runtimes does not support
+                                            # autoscaling.
+                                            None,
                                             default_version_port,
                                             port_registry,
                                             request_data,
@@ -939,6 +1073,7 @@ class AutoScalingModule(Module):
                                             automatic_restarts,
                                             allow_skipped_files,
                                             threadsafe_override)
+
 
     self._process_automatic_scaling(
         self._module_configuration.automatic_scaling)
@@ -1303,6 +1438,7 @@ class ManualScalingModule(Module):
                php_config,
                python_config,
                cloud_sql_config,
+               vm_config,
                default_version_port,
                port_registry,
                request_data,
@@ -1312,6 +1448,7 @@ class ManualScalingModule(Module):
                automatic_restarts,
                allow_skipped_files,
                threadsafe_override):
+
     """Initializer for ManualScalingModule.
 
     Args:
@@ -1336,6 +1473,9 @@ class ManualScalingModule(Module):
       cloud_sql_config: A runtime_config_pb2.CloudSQL instance containing the
           required configuration for local Google Cloud SQL development. If None
           then Cloud SQL will not be available.
+      vm_config: A runtime_config_pb2.VMConfig instance containing
+          VM runtime-specific configuration. If None all docker-related stuff
+          is disabled.
       default_version_port: An int containing the port of the default version.
       port_registry: A dispatcher.PortRegistry used to provide the Dispatcher
           with a mapping of port to Module and Instance.
@@ -1365,6 +1505,7 @@ class ManualScalingModule(Module):
                                               php_config,
                                               python_config,
                                               cloud_sql_config,
+                                              vm_config,
                                               default_version_port,
                                               port_registry,
                                               request_data,
@@ -1374,6 +1515,7 @@ class ManualScalingModule(Module):
                                               automatic_restarts,
                                               allow_skipped_files,
                                               threadsafe_override)
+
 
     self._process_manual_scaling(module_configuration.manual_scaling)
 
@@ -1519,9 +1661,8 @@ class ManualScalingModule(Module):
     if self._module_configuration.is_backend:
       environ['BACKEND_ID'] = self._module_configuration.module_name
     else:
-      environ['BACKEND_ID'] = appinfo.MODULE_SEPARATOR.join([
-          self._module_configuration.module_name,
-          self._module_configuration.version_id.split('.', 1)[0]])
+      environ['BACKEND_ID'] = (
+          self._module_configuration.version_id.split('.', 1)[0])
     if inst is not None:
       return self._handle_instance_request(
           environ, start_response, url_map, match, request_id, inst,
@@ -1669,7 +1810,7 @@ class ManualScalingModule(Module):
     """Suspends serving for this module, quitting all running instances."""
     with self._instances_change_lock:
       if self._suspended:
-        raise request_info.ModuleAlreadyStoppedError()
+        raise request_info.VersionAlreadyStoppedError()
       self._suspended = True
       with self._condition:
         instances_to_stop = zip(self._instances, self._wsgi_servers)
@@ -1689,7 +1830,7 @@ class ManualScalingModule(Module):
     """Resumes serving for this module."""
     with self._instances_change_lock:
       if not self._suspended:
-        raise request_info.ModuleAlreadyStartedError()
+        raise request_info.VersionAlreadyStartedError()
       self._suspended = False
       with self._condition:
         if self._quit_event.is_set():
@@ -1711,7 +1852,7 @@ class ManualScalingModule(Module):
       self._async_start_instance(wsgi_servr, inst)
 
   def restart(self):
-    """Restarts the the module, replacing all running instances."""
+    """Restarts the module, replacing all running instances."""
     with self._instances_change_lock:
       with self._condition:
         if self._quit_event.is_set():
@@ -1803,6 +1944,7 @@ class BasicScalingModule(Module):
                php_config,
                python_config,
                cloud_sql_config,
+               vm_config,
                default_version_port,
                port_registry,
                request_data,
@@ -1812,6 +1954,7 @@ class BasicScalingModule(Module):
                automatic_restarts,
                allow_skipped_files,
                threadsafe_override):
+
     """Initializer for BasicScalingModule.
 
     Args:
@@ -1836,6 +1979,9 @@ class BasicScalingModule(Module):
       cloud_sql_config: A runtime_config_pb2.CloudSQL instance containing the
           required configuration for local Google Cloud SQL development. If None
           then Cloud SQL will not be available.
+      vm_config: A runtime_config_pb2.VMConfig instance containing
+          VM runtime-specific configuration. If None all docker-related stuff
+          is disabled.
       default_version_port: An int containing the port of the default version.
       port_registry: A dispatcher.PortRegistry used to provide the Dispatcher
           with a mapping of port to Module and Instance.
@@ -1865,6 +2011,7 @@ class BasicScalingModule(Module):
                                              php_config,
                                              python_config,
                                              cloud_sql_config,
+                                             vm_config,
                                              default_version_port,
                                              port_registry,
                                              request_data,
@@ -1874,6 +2021,7 @@ class BasicScalingModule(Module):
                                              automatic_restarts,
                                              allow_skipped_files,
                                              threadsafe_override)
+
     self._process_basic_scaling(module_configuration.basic_scaling)
 
     self._instances = []  # Protected by self._condition.
@@ -2027,9 +2175,8 @@ class BasicScalingModule(Module):
     if self._module_configuration.is_backend:
       environ['BACKEND_ID'] = self._module_configuration.module_name
     else:
-      environ['BACKEND_ID'] = appinfo.MODULE_SEPARATOR.join([
-          self._module_configuration.module_name,
-          self._module_configuration.version_id.split('.', 1)[0]])
+      environ['BACKEND_ID'] = (
+          self._module_configuration.version_id.split('.', 1)[0])
     if inst is not None:
       return self._handle_instance_request(
           environ, start_response, url_map, match, request_id, inst,
@@ -2172,7 +2319,7 @@ class BasicScalingModule(Module):
     self._async_shutdown_instance(inst, wsgi_servr.port)
 
   def restart(self):
-    """Restarts the the module, replacing all running instances."""
+    """Restarts the module, replacing all running instances."""
     instances_to_stop = []
     instances_to_start = []
     with self._condition:
@@ -2229,6 +2376,7 @@ class InteractiveCommandModule(Module):
                php_config,
                python_config,
                cloud_sql_config,
+               vm_config,
                default_version_port,
                port_registry,
                request_data,
@@ -2262,6 +2410,9 @@ class InteractiveCommandModule(Module):
       cloud_sql_config: A runtime_config_pb2.CloudSQL instance containing the
           required configuration for local Google Cloud SQL development. If None
           then Cloud SQL will not be available.
+      vm_config: A runtime_config_pb2.VMConfig instance containing
+          VM runtime-specific configuration. If None all docker-related stuff
+          is disabled.
       default_version_port: An int containing the port of the default version.
       port_registry: A dispatcher.PortRegistry used to provide the Dispatcher
           with a mapping of port to Module and Instance.
@@ -2288,6 +2439,7 @@ class InteractiveCommandModule(Module):
         php_config,
         python_config,
         cloud_sql_config,
+        vm_config,
         default_version_port,
         port_registry,
         request_data,
@@ -2377,7 +2529,7 @@ class InteractiveCommandModule(Module):
       return ['The command timed-out while waiting for another one to complete']
 
   def restart(self):
-    """Restarts the the module."""
+    """Restarts the module."""
     with self._inst_lock:
       if self._inst:
         self._inst.quit(force=True)

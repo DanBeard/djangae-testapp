@@ -757,7 +757,6 @@ def _GetIndexes(namespace='', offset=None, limit=20,
   _CheckStatus(response.status())
   return response
 
-
 class Field(object):
   """An abstract base class which represents a field of a document.
 
@@ -942,7 +941,7 @@ class AtomField(Field):
 
 
 class DateField(Field):
-  """A Field that has a date value.
+  """A Field that has a date or datetime value.
 
   The following example shows a date field named creation_date:
     DateField(name='creation_date', value=datetime.date(2011, 03, 11))
@@ -953,10 +952,10 @@ class DateField(Field):
 
     Args:
       name: The name of the field.
-      value: A datetime.date but not a datetime.datetime.
+      value: A datetime.date or a datetime.datetime.
 
     Raises:
-      TypeError: If value is not a datetime.date or is a datetime.datetime.
+      TypeError: If value is not a datetime.date or a datetime.datetime.
     """
     Field.__init__(self, name, value)
 
@@ -1044,6 +1043,10 @@ class GeoPoint(object):
       raise ValueError('longitude must be between -180 and 180 degrees '
                        'inclusive, was %f' % value)
     return value
+
+  def __eq__(self, other):
+    return (self.latitude == other.latitude and
+      self.longitude == other.longitude)
 
   def __repr__(self):
     return _Repr(self,
@@ -2394,6 +2397,8 @@ class Index(object):
       self._namespace = u''
     namespace_manager.validate_namespace(self._namespace, exception=ValueError)
     self._schema = None
+    self._storage_usage = None
+    self._storage_limit = None
 
   @property
   def schema(self):
@@ -2401,6 +2406,25 @@ class Index(object):
 
     Only valid for Indexes returned by search.get_indexes method."""
     return self._schema
+
+  @property
+  def storage_usage(self):
+    """The approximate number of bytes used by this index.
+
+    The number may be slightly stale, as it may not reflect the
+    results of recent changes.
+
+    Returns None for indexes not obtained from search.get_indexes.
+
+    """
+    return self._storage_usage
+
+  @property
+  def storage_limit(self):
+    """The maximum allowable storage for this index, in bytes.
+
+    Returns None for indexes not obtained from search.get_indexes."""
+    return self._storage_limit
 
   @property
   def name(self):
@@ -2434,7 +2458,9 @@ class Index(object):
 
     return _Repr(self, [('name', self.name), ('namespace', self.namespace),
                         ('source', self._source),
-                        ('schema', self.schema)])
+                        ('schema', self.schema),
+                        ('storage_usage', self.storage_usage),
+                        ('storage_limit', self.storage_limit)])
 
   def _NewPutResultFromPb(self, status_pb, doc_id):
     """Constructs PutResult from RequestStatus pb and doc_id."""
@@ -2702,7 +2728,7 @@ class Index(object):
           query=Query('subject:first good',
               options=QueryOptions(limit=20,
                   cursor=Cursor(),
-                  sortOptions=SortOptions(
+                  sort_options=SortOptions(
                       expressions=[SortExpression(expression='subject')],
                       limit=1000),
                   returned_fields=['author', 'subject', 'summary'],
@@ -2920,6 +2946,9 @@ def _NewIndexFromPb(index_metadata_pb):
   index = _NewIndexFromIndexSpecPb(index_metadata_pb.index_spec())
   if index_metadata_pb.field_list():
     index._schema = _NewSchemaFromPb(index_metadata_pb.field_list())
+  if index_metadata_pb.has_storage():
+    index._storage_usage = index_metadata_pb.storage().amount_used()
+    index._storage_limit = index_metadata_pb.storage().limit()
   return index
 
 

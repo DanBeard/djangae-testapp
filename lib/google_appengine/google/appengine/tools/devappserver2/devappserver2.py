@@ -27,17 +27,19 @@ import sys
 import tempfile
 import time
 
+from google.appengine.api import appinfo
 from google.appengine.datastore import datastore_stub_util
 from google.appengine.tools import boolean_action
-from google.appengine.tools.devappserver2.admin import admin_server
 from google.appengine.tools.devappserver2 import api_server
 from google.appengine.tools.devappserver2 import application_configuration
 from google.appengine.tools.devappserver2 import dispatcher
+from google.appengine.tools.devappserver2 import gcd_application
 from google.appengine.tools.devappserver2 import login
 from google.appengine.tools.devappserver2 import runtime_config_pb2
 from google.appengine.tools.devappserver2 import shutdown
 from google.appengine.tools.devappserver2 import update_checker
 from google.appengine.tools.devappserver2 import wsgi_request_info
+from google.appengine.tools.devappserver2.admin import admin_server
 
 # Initialize logging early -- otherwise some library packages may
 # pre-empt our log formatting.  NOTE: the level is provisional; it may
@@ -65,6 +67,9 @@ _LOG_LEVEL_TO_PYTHON_CONSTANT = {
     'error': logging.ERROR,
     'critical': logging.CRITICAL,
 }
+
+# The default encoding used by the production interpreter.
+_PROD_DEFAULT_ENCODING = 'ascii'
 
 
 def _generate_storage_paths(app_id):
@@ -218,7 +223,7 @@ def parse_per_module_option(
       else:
         module_name = module_name.strip()
         if not module_name:
-          module_name = 'default'
+          module_name = appinfo.DEFAULT_MODULE
         if module_name in module_to_value:
           raise argparse.ArgumentTypeError(
               multiple_duplicate_module_error % module_name)
@@ -302,7 +307,13 @@ def create_command_line_parser():
 
   parser = argparse.ArgumentParser(
       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument('yaml_files', nargs='+')
+  arg_name = 'yaml_path'
+  arg_help = 'Path to a yaml file, or a directory containing yaml files'
+  if application_configuration.java_supported():
+    arg_name = 'yaml_or_war_path'
+    arg_help += ', or a directory containing WEB-INF/web.xml'
+  parser.add_argument(
+      'config_paths', metavar=arg_name, nargs='+', help=arg_help)
 
   common_group = parser.add_argument_group('Common')
   common_group.add_argument(
@@ -351,6 +362,7 @@ def create_command_line_parser():
       'can be a boolean, in which case all modules threadsafe setting will '
       'be overridden or a comma-separated list of module:threadsafe_override '
       'e.g. "default:False,backend:True"')
+  common_group.add_argument('--docker_daemon_url', help=argparse.SUPPRESS)
 
   # PHP
   php_group = parser.add_argument_group('PHP')
@@ -363,6 +375,17 @@ def create_command_line_parser():
                          const=True,
                          default=False,
                          help='enable XDebug remote debugging')
+
+  # App Identity
+  appidentity_group = parser.add_argument_group('Application Identity')
+  appidentity_group.add_argument(
+      '--appidentity_email_address',
+      help='email address associated with a service account that has a '
+      'downloadable key. May be None for no local application identity.')
+  appidentity_group.add_argument(
+      '--appidentity_private_key_path',
+      help='path to private key file associated with service account '
+      '(.pem format). Must be set if appidentity_email_address is set.')
 
   # Python
   python_group = parser.add_argument_group('Python')
@@ -404,7 +427,7 @@ def create_command_line_parser():
   cloud_sql_group.add_argument(
       '--mysql_password',
       default='',
-      help='passpord to use when connecting to the MySQL server specified in '
+      help='password to use when connecting to the MySQL server specified in '
       '--mysql_host and --mysql_port or --mysql_socket')
   cloud_sql_group.add_argument(
       '--mysql_socket',
@@ -447,6 +470,13 @@ def create_command_line_parser():
       'deprecated. This flag will be removed in a future '
       'release. Please do not rely on sequential IDs in your '
       'tests.')
+  datastore_group.add_argument(
+      '--enable_cloud_datastore',
+      action=boolean_action.BooleanAction,
+      const=True,
+      default=False,
+      help=argparse.SUPPRESS #'enable the Google Cloud Datastore API.'
+      )
 
   # Logs
   logs_group = parser.add_argument_group('Logs API')
@@ -469,7 +499,7 @@ def create_command_line_parser():
       const=True,
       default=False,
       help='use the "sendmail" tool to transmit e-mail sent '
-      'using the Mail API (ignored if --smpt_host is set)')
+      'using the Mail API (ignored if --smtp_host is set)')
   mail_group.add_argument(
       '--smtp_host', default='',
       help='host name of an SMTP server to use to transmit '
@@ -488,6 +518,13 @@ def create_command_line_parser():
       '--smtp_password', default='',
       help='password to use when connecting to the SMTP server '
       'specified in --smtp_host and --smtp_port')
+  mail_group.add_argument(
+      '--smtp_allow_tls',
+      action=boolean_action.BooleanAction,
+      const=True,
+      default=False,
+      help='Allow TLS to be used when the SMTP server announces TLS support '
+      '(ignored if --smtp_host is not set)')
 
   # Matcher
   prospective_search_group = parser.add_argument_group('Prospective Search API')
@@ -633,6 +670,7 @@ class DevelopmentServer(object):
     # A list of servers that are currently running.
     self._running_modules = []
     self._module_to_port = {}
+    self._dispatcher = None
 
   def module_to_address(self, module_name, instance=None):
     """Returns the address of a module."""
@@ -654,12 +692,31 @@ class DevelopmentServer(object):
         _LOG_LEVEL_TO_PYTHON_CONSTANT[options.dev_appserver_log_level])
 
     configuration = application_configuration.ApplicationConfiguration(
-        options.yaml_files)
+        options.config_paths)
+
+    if options.enable_cloud_datastore:
+      # This requires the oauth server stub to return that the logged in user
+      # is in fact an admin.
+      os.environ['OAUTH_IS_ADMIN'] = '1'
+      gcd_module = application_configuration.ModuleConfiguration(
+          gcd_application.generate_gcd_app(configuration.app_id.split('~')[1]))
+      configuration.modules.append(gcd_module)
 
     if options.skip_sdk_update_check:
       logging.info('Skipping SDK update check.')
     else:
       update_checker.check_for_updates(configuration)
+
+    # There is no good way to set the default encoding from application code
+    # (it needs to be done during interpreter initialization in site.py or
+    # sitecustomize.py) so just warn developers if they have a different
+    # encoding than production.
+    if sys.getdefaultencoding() != _PROD_DEFAULT_ENCODING:
+      logging.warning(
+          'The default encoding of your local Python interpreter is set to %r '
+          'while App Engine\'s production environment uses %r; as a result '
+          'your code may behave differently when deployed.',
+          sys.getdefaultencoding(), _PROD_DEFAULT_ENCODING)
 
     if options.port == 0:
       logging.warn('DEFAULT_VERSION_HOSTNAME will not be set correctly with '
@@ -676,6 +733,7 @@ class DevelopmentServer(object):
         self._create_php_config(options),
         self._create_python_config(options),
         self._create_cloud_sql_config(options),
+        self._create_vm_config(options),
         self._create_module_to_setting(options.max_module_instances,
                                        configuration, '--max_module_instances'),
         options.use_mtime_file_watcher,
@@ -693,7 +751,6 @@ class DevelopmentServer(object):
     self._running_modules.append(apis)
 
     self._dispatcher.start(options.api_host, apis.port, request_data)
-    self._running_modules.append(self._dispatcher)
 
     xsrf_path = os.path.join(storage_path, 'xsrf')
     admin = admin_server.AdminServer(options.admin_host, options.admin_port,
@@ -705,6 +762,8 @@ class DevelopmentServer(object):
     """Stops all running devappserver2 modules."""
     while self._running_modules:
       self._running_modules.pop().quit()
+    if self._dispatcher:
+      self._dispatcher.quit()
 
   @staticmethod
   def _create_api_server(request_data, storage_path, options, configuration):
@@ -762,6 +821,10 @@ class DevelopmentServer(object):
         # The "trusted" flag is only relevant for Google administrative
         # applications.
         trusted=getattr(options, 'trusted', False),
+        appidentity_email_address=options.appidentity_email_address,
+        appidentity_private_key_path=os.path.abspath(
+            options.appidentity_private_key_path)
+        if options.appidentity_private_key_path else None,
         blobstore_path=blobstore_path,
         datastore_path=datastore_path,
         datastore_consistency=consistency,
@@ -775,6 +838,7 @@ class DevelopmentServer(object):
         mail_smtp_password=options.smtp_password,
         mail_enable_sendmail=options.enable_sendmail,
         mail_show_mail_body=options.show_mail_body,
+        mail_allow_tls=options.smtp_allow_tls,
         matcher_prospective_search_path=prospective_search_path,
         search_index_path=search_index_path,
         taskqueue_auto_run_tasks=options.enable_task_running,
@@ -815,6 +879,13 @@ class DevelopmentServer(object):
     if options.mysql_socket:
       cloud_sql_config.mysql_socket = options.mysql_socket
     return cloud_sql_config
+
+  @staticmethod
+  def _create_vm_config(options):
+    vm_config = runtime_config_pb2.VMConfig()
+    if options.docker_daemon_url:
+      vm_config.docker_daemon_url = options.docker_daemon_url
+    return vm_config
 
   @staticmethod
   def _create_module_to_setting(setting, configuration, option):

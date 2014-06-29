@@ -115,13 +115,22 @@ class MapperPipeline(pipeline_base._OutputSlotsMixin,
         output_writer_spec=output_writer_spec,
         )
     self.fill(self.outputs.job_id, mapreduce_id)
-    self.set_status(console_url="%s/detail?job_id=%s" % (
+    self.set_status(console_url="%s/detail?mapreduce_id=%s" % (
         (parameters.config.BASE_PATH, mapreduce_id)))
+
+  def try_cancel(self):
+    """Always allow mappers to be canceled and retried."""
+    return True
 
   def callback(self):
     """Callback after this async pipeline finishes."""
     mapreduce_id = self.outputs.job_id.value
     mapreduce_state = model.MapreduceState.get_by_job_id(mapreduce_id)
+    if mapreduce_state.result_status != model.MapreduceState.RESULT_SUCCESS:
+      self.retry("Job %s had status %s" % (
+          mapreduce_id, mapreduce_state.result_status))
+      return
+
     mapper_spec = mapreduce_state.mapreduce_spec.mapper
     outputs = []
     output_writer_class = mapper_spec.output_writer_class()

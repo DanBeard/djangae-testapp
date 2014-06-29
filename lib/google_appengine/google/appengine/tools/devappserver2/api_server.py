@@ -58,6 +58,7 @@ from google.appengine.api.system import system_stub
 from google.appengine.api.xmpp import xmpp_service_stub
 from google.appengine.datastore import datastore_sqlite_stub
 from google.appengine.datastore import datastore_stub_util
+from google.appengine.datastore import datastore_v4_pb
 from google.appengine.datastore import datastore_v4_stub
 
 from google.appengine.api import apiproxy_stub_map
@@ -71,6 +72,32 @@ from google.appengine.tools.devappserver2 import wsgi_server
 # TODO: Remove this lock when stubs have been audited for thread
 # safety.
 GLOBAL_API_LOCK = threading.RLock()
+
+
+# We don't want to support datastore_v4 everywhere, because users are supposed
+# to use the Cloud Datastore API going forward, so we don't want to put these
+# entries in remote_api_servers.SERVICE_PB_MAP. But for our own implementation
+# of the Cloud Datastore API we need those methods to work when an instance
+# issues them, specifically the DatstoreApiServlet running as a module inside
+# the app we are running. The consequence is that other app code can also
+# issue datastore_v4 API requests, but since we don't document these requests
+# or export them through any language bindings this is unlikely in practice.
+_DATASTORE_V4_METHODS = {
+    'AllocateIds': (datastore_v4_pb.AllocateIdsRequest,
+                    datastore_v4_pb.AllocateIdsResponse),
+    'BeginTransaction': (datastore_v4_pb.BeginTransactionRequest,
+                         datastore_v4_pb.BeginTransactionResponse),
+    'Commit': (datastore_v4_pb.CommitRequest,
+               datastore_v4_pb.CommitResponse),
+    'ContinueQuery': (datastore_v4_pb.ContinueQueryRequest,
+                      datastore_v4_pb.ContinueQueryResponse),
+    'Lookup': (datastore_v4_pb.LookupRequest,
+               datastore_v4_pb.LookupResponse),
+    'Rollback': (datastore_v4_pb.RollbackRequest,
+                 datastore_v4_pb.RollbackResponse),
+    'RunQuery': (datastore_v4_pb.RunQueryRequest,
+                 datastore_v4_pb.RunQueryResponse),
+}
 
 
 def _execute_request(request):
@@ -96,7 +123,13 @@ def _execute_request(request):
     logging.error('Received a request without request_id: %s', request)
     request_id = None
 
-  service_methods = remote_api_services.SERVICE_PB_MAP.get(service, {})
+  service_methods = (_DATASTORE_V4_METHODS if service == 'datastore_v4'
+                     else remote_api_services.SERVICE_PB_MAP.get(service, {}))
+  # We do this rather than making a new map that is a superset of
+  # remote_api_services.SERVICE_PB_MAP because that map is not initialized
+  # all in one place, so we would have to be careful about where we made
+  # our new map.
+
   request_class, response_class = service_methods.get(method, (None, None))
   if not request_class:
     raise apiproxy_errors.CallNotFoundError('%s.%s does not exist' % (service,
@@ -210,6 +243,8 @@ def setup_stubs(
     app_id,
     application_root,
     trusted,
+    appidentity_email_address,
+    appidentity_private_key_path,
     blobstore_path,
     datastore_consistency,
     datastore_path,
@@ -223,6 +258,7 @@ def setup_stubs(
     mail_smtp_password,
     mail_enable_sendmail,
     mail_show_mail_body,
+    mail_allow_tls,
     matcher_prospective_search_path,
     search_index_path,
     taskqueue_auto_run_tasks,
@@ -240,6 +276,12 @@ def setup_stubs(
     application_root: The path to the directory containing the user's
         application e.g. "/home/joe/myapp".
     trusted: A bool indicating if privileged APIs should be made available.
+    appidentity_email_address: Email address associated with a service account
+        that has a downloadable key. May be None for no local application
+        identity.
+    appidentity_private_key_path: Path to private key file associated with
+        service account (.pem format). Must be set if appidentity_email_address
+        is set.
     blobstore_path: The path to the file that should be used for blobstore
         storage.
     datastore_consistency: The datastore_stub_util.BaseConsistencyPolicy to
@@ -270,6 +312,9 @@ def setup_stubs(
         sending e-mails. This argument is ignored if mail_smtp_host is not None.
     mail_show_mail_body: A bool indicating whether the body of sent e-mails
         should be written to the logs.
+    mail_allow_tls: A bool indicating whether TLS should be allowed when
+        communicating with an SMTP server. This argument is ignored if
+        mail_smtp_host is None.
     matcher_prospective_search_path: The path to the file that should be used to
         save prospective search subscriptions.
     search_index_path: The path to the file that should be used for search index
@@ -284,7 +329,9 @@ def setup_stubs(
     default_gcs_bucket_name: A str, overriding the default bucket behavior.
   """
 
-  identity_stub = app_identity_stub.AppIdentityServiceStub()
+  identity_stub = app_identity_stub.AppIdentityServiceStub.Create(
+      email_address=appidentity_email_address,
+      private_key_path=appidentity_private_key_path)
   if default_gcs_bucket_name is not None:
     identity_stub.SetDefaultGcsBucketName(default_gcs_bucket_name)
   apiproxy_stub_map.apiproxy.RegisterStub('app_identity_service', identity_stub)
@@ -352,7 +399,8 @@ def setup_stubs(
                                 mail_smtp_user,
                                 mail_smtp_password,
                                 enable_sendmail=mail_enable_sendmail,
-                                show_mail_body=mail_show_mail_body))
+                                show_mail_body=mail_show_mail_body,
+                                allow_tls=mail_allow_tls))
 
   apiproxy_stub_map.apiproxy.RegisterStub(
       'memcache',
@@ -462,6 +510,8 @@ def test_setup_stubs(
     app_id='myapp',
     application_root='/tmp/root',
     trusted=False,
+    appidentity_email_address=None,
+    appidentity_private_key_path=None,
     blobstore_path='/dev/null',
     datastore_consistency=None,
     datastore_path=':memory:',
@@ -475,6 +525,7 @@ def test_setup_stubs(
     mail_smtp_password='',
     mail_enable_sendmail=False,
     mail_show_mail_body=False,
+    mail_allow_tls=False,
     matcher_prospective_search_path='/dev/null',
     search_index_path=None,
     taskqueue_auto_run_tasks=False,
@@ -496,6 +547,8 @@ def test_setup_stubs(
               app_id,
               application_root,
               trusted,
+              appidentity_email_address,
+              appidentity_private_key_path,
               blobstore_path,
               datastore_consistency,
               datastore_path,
@@ -509,6 +562,7 @@ def test_setup_stubs(
               mail_smtp_password,
               mail_enable_sendmail,
               mail_show_mail_body,
+              mail_allow_tls,
               matcher_prospective_search_path,
               search_index_path,
               taskqueue_auto_run_tasks,

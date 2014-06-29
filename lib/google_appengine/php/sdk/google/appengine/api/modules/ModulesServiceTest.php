@@ -21,11 +21,6 @@
 
 namespace google\appengine\api\modules;
 
-require_once 'google/appengine/api/modules/modules_service_pb.php';
-require_once 'google/appengine/api/modules/ModulesService.php';
-require_once 'google/appengine/runtime/ApplicationError.php';
-require_once 'google/appengine/testing/ApiProxyTestBase.php';
-
 use google\appengine\runtime\ApplicationError;
 use google\appengine\testing\ApiProxyTestBase;
 use google\appengine\GetDefaultVersionRequest;
@@ -241,20 +236,20 @@ class ModulesTest extends ApiProxyTestBase {
 
     $this->apiProxyMock->expectCall('modules', 'StartModule', $req, $resp);
 
-    ModulesService::startModule('module1', 'v1');
+    ModulesService::startVersion('module1', 'v1');
     $this->apiProxyMock->verify();
   }
 
   public function testStartModuleWithIntegerModule() {
     $this->setExpectedException('\InvalidArgumentException',
       '$module must be a string. Actual type: integer');
-    ModulesService::startModule(5, 'v1');
+    ModulesService::startVersion(5, 'v1');
   }
 
   public function testStartModuleWithIntegerVersion() {
     $this->setExpectedException('\InvalidArgumentException',
       '$version must be a string. Actual type: integer');
-    ModulesService::startModule('module1', 5);
+    ModulesService::startVersion('module1', 5);
   }
 
   public function testStartModuleWithTransientError() {
@@ -269,7 +264,7 @@ class ModulesTest extends ApiProxyTestBase {
         '\google\appengine\api\modules\TransientModulesException');
     $this->apiProxyMock->expectCall('modules', 'StartModule', $req, $resp);
 
-    ModulesService::startModule('module1', 'v1');
+    ModulesService::startVersion('module1', 'v1');
     $this->apiProxyMock->verify();
   }
 
@@ -279,7 +274,7 @@ class ModulesTest extends ApiProxyTestBase {
 
     $this->apiProxyMock->expectCall('modules', 'StopModule', $req, $resp);
 
-    ModulesService::stopModule();
+    ModulesService::stopVersion();
     $this->apiProxyMock->verify();
   }
 
@@ -292,20 +287,20 @@ class ModulesTest extends ApiProxyTestBase {
 
     $this->apiProxyMock->expectCall('modules', 'StopModule', $req, $resp);
 
-    ModulesService::stopModule('module1', 'v1');
+    ModulesService::stopVersion('module1', 'v1');
     $this->apiProxyMock->verify();
   }
 
   public function testStopModuleWithIntegerModule() {
     $this->setExpectedException('\InvalidArgumentException',
       '$module must be a string. Actual type: integer');
-    ModulesService::stopModule(5, 'v1');
+    ModulesService::stopVersion(5, 'v1');
   }
 
   public function testStopModuleWithIntegerVersion() {
     $this->setExpectedException('\InvalidArgumentException',
       '$version must be a string. Actual type: integer');
-    ModulesService::stopModule('module1', 5);
+    ModulesService::stopVersion('module1', 5);
   }
 
   public function testStopModuleWithTransientError() {
@@ -320,7 +315,7 @@ class ModulesTest extends ApiProxyTestBase {
         '\google\appengine\api\modules\TransientModulesException');
     $this->apiProxyMock->expectCall('modules', 'StopModule', $req, $resp);
 
-    ModulesService::stopModule('module1', 'v1');
+    ModulesService::stopVersion('module1', 'v1');
     $this->apiProxyMock->verify();
   }
 

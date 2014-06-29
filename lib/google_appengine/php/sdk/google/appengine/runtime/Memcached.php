@@ -38,12 +38,6 @@ use google\appengine\runtime\ApiProxy;
 use google\appengine\runtime\Error;
 use google\appengine\runtime\MemcacheUtils;
 
-require_once 'google/appengine/api/memcache/memcache_service_pb.php';
-require_once 'google/appengine/runtime/MemcacheUtils.php';
-require_once 'google/appengine/runtime/Memcache.php';
-require_once 'google/appengine/runtime/ApiProxy.php';
-require_once 'google/appengine/runtime/Error.php';
-
 class Memcached {
 
   /**
@@ -503,8 +497,13 @@ class Memcached {
         $cas_token = $item->getCasId();
       }
       $this->result_code = self::RES_SUCCESS;
-      return MemcacheUtils::deserializeValue($item->getValue(),
-                                             $item->getFlags());
+      try {
+        return MemcacheUtils::deserializeValue($item->getValue(),
+                                               $item->getFlags());
+      } catch (\UnexpectedValueException $e) {
+        $this->result_code = self::RES_NOTFOUND;
+        return false;
+      }
     } else {
       $this->result_code = self::RES_NOTFOUND;
       return false;
@@ -631,8 +630,13 @@ class Memcached {
 
     $return_value = array();
     foreach ($response->getItemList() as $item) {
-      $return_value[$item->getKey()] = MemcacheUtils::deserializeValue(
-          $item->getValue(), $item->getFlags());
+      try {
+        $return_value[$item->getKey()] = MemcacheUtils::deserializeValue(
+            $item->getValue(), $item->getFlags());
+      } catch (\UnexpectedValueException $e) {
+        // Skip entries that cannot be deserialized.
+        continue;
+      }
       if ($item->hasCasId()) {
         $cas_tokens[$item->getKey()] = $item->getCasId();
       }
@@ -720,7 +724,7 @@ class Memcached {
         return "FAILURE";
       case self::RES_NOTSTORED:
         return "NOT STORED";
-      case self::RES_NOT_FOUND:
+      case self::RES_NOTFOUND:
         return "NOT FOUND";
     }
     return "UNKNOWN";
@@ -876,7 +880,7 @@ class Memcached {
   /**
    * Replace is similar to Memcache::set(), but the operation will fail if the
    * key is not found on the server.
-   * 
+   *
    * @param string $key The key under which to store the value.
    * @param mixed $value The value to store.
    * @param int $expiration The expiration time, defaults to 0.
@@ -891,7 +895,7 @@ class Memcached {
   }
 
   /**
-   * @see Memecached::replace()
+   * @see Memcached::replace()
    *
    * @param string $server_key This parameter is ignored.
    * @param string $key The key under which to store the value.

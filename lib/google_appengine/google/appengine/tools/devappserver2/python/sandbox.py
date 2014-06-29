@@ -41,12 +41,13 @@ from google.appengine.tools.devappserver2.python import stubs
 CODING_MAGIC_COMMENT_RE = re.compile('coding[:=]\s*([-\w.]+)')
 DEFAULT_ENCODING = 'ascii'
 
-_C_MODULES = frozenset(['numpy', 'Crypto', 'lxml', 'PIL'])
+_C_MODULES = frozenset(['cv', 'Crypto', 'lxml', 'numpy', 'PIL'])
 
 NAME_TO_CMODULE_WHITELIST_REGEX = {
+    'cv': re.compile(r'cv(\..*)?$'),
+    'lxml': re.compile(r'lxml(\..*)?$'),
     'numpy': re.compile(r'numpy(\..*)?$'),
     'pycrypto': re.compile(r'Crypto(\..*)?$'),
-    'lxml': re.compile(r'lxml(\..*)?$'),
     'PIL': re.compile(r'(PIL(\..*)?|_imaging|_imagingft|_imagingmath)$'),
     'ssl': re.compile(r'_ssl$'),
 }
@@ -54,7 +55,7 @@ NAME_TO_CMODULE_WHITELIST_REGEX = {
 # Maps App Engine third-party library names to the Python package name for
 # libraries whose names differ from the package names.
 _THIRD_PARTY_LIBRARY_NAME_OVERRIDES = {
-    'pycrypto': 'Crypto'
+    'pycrypto': 'Crypto',
 }
 
 # The location of third-party libraries will be different for the packaged SDK.
@@ -146,7 +147,6 @@ def enable_sandbox(config):
   sys.meta_path = [
       StubModuleImportHook(),
       ModuleOverrideImportHook(_MODULE_OVERRIDE_POLICIES),
-      BuiltinImportHook(),
       CModuleImportHook(enabled_library_regexes),
       path_override_hook,
       PyCryptoRandomImportHook,
@@ -295,7 +295,7 @@ class BaseImportHook(object):
     Returns:
       A tuple (source_file, path_name, description, loader) where:
         source_file: An open file or None.
-        path_name: A str containing the the path to the module.
+        path_name: A str containing the path to the module.
         description: A description tuple like the one imp.find_module returns.
         loader: A PEP 302 compatible path hook. If this is not None, then the
             other elements will be None.
@@ -776,6 +776,7 @@ _WHITE_LIST_C_MODULES = [
     'exceptions',
     '_fileio',
     '_functools',
+    'future_builtins',
     'gc',
     '_hashlib',
     '_heapq',
@@ -815,26 +816,8 @@ _WHITE_LIST_C_MODULES = [
 ]
 
 
-class BuiltinImportHook(object):
-  """An import hook implementing a builtin whitelist.
-
-  BuiltinImportHook implements the PEP 302 finder protocol where it returns
-  itself as a loader for any builtin module that isn't whitelisted. The loader
-  implementation always raises ImportError.
-  """
-
-  def find_module(self, fullname, unused_path=None):
-    if (fullname in sys.builtin_module_names and
-        fullname not in _WHITE_LIST_C_MODULES):
-      return self
-    return None
-
-  def load_module(self, fullname):
-    raise ImportError('No module named %s' % fullname)
-
-
 class CModuleImportHook(object):
-  """An import hook implementing a C module whitelist.
+  """An import hook implementing a C module (builtin or extensions) whitelist.
 
   CModuleImportHook implements the PEP 302 finder protocol where it returns
   itself as a loader for any builtin module that isn't whitelisted or part of an
@@ -845,21 +828,23 @@ class CModuleImportHook(object):
   def __init__(self, enabled_regexes):
     self._enabled_regexes = enabled_regexes
 
-  def find_module(self, fullname, path=None):
-    if fullname in _WHITE_LIST_C_MODULES:
-      return None
-    if any(regex.match(fullname) for regex in self._enabled_regexes):
-      return None
+  @staticmethod
+  def _module_type(fullname, path):
     _, _, submodule_name = fullname.rpartition('.')
     try:
-      result = imp.find_module(submodule_name, path)
+      f, _, description = imp.find_module(submodule_name, path)
+      _, _, file_type = description
     except ImportError:
       return None
-    f, _, description = result
-    _, _, file_type = description
-    if isinstance(f, file):
+    if f:
       f.close()
-    if file_type == imp.C_EXTENSION:
+    return file_type
+
+  def find_module(self, fullname, path=None):
+    if (fullname in _WHITE_LIST_C_MODULES or
+        any(regex.match(fullname) for regex in self._enabled_regexes)):
+      return None
+    if self._module_type(fullname, path) in [imp.C_EXTENSION, imp.C_BUILTIN]:
       return self
     return None
 

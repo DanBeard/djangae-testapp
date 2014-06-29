@@ -17,6 +17,7 @@
 """Stub implementation for Log Service that uses sqlite."""
 
 import atexit
+import codecs
 import logging
 import time
 
@@ -157,6 +158,8 @@ class LogServiceStub(apiproxy_stub.APIProxyStub):
     """
     if module is None:
       module = appinfo.DEFAULT_MODULE
+    if version_id is None:
+      version_id = 'NO-VERSION'
     major_version_id = version_id.split('.', 1)[0]
     if start_time is None:
       start_time = self._get_time_usec()
@@ -215,7 +218,7 @@ class LogServiceStub(apiproxy_stub.APIProxyStub):
   def _tuple_from_log_line(row_id, log_line):
     message = log_line.message()
     if isinstance(message, str):
-      message = message.decode('utf-8')
+      message = codecs.decode(message, 'utf-8', 'replace')
     return (row_id, log_line.timestamp_usec(), log_line.level(), message)
 
   @apiproxy_stub.Synchronized
@@ -343,8 +346,9 @@ class LogServiceStub(apiproxy_stub.APIProxyStub):
       if module_version.has_module_id():
         module = module_version.module_id()
       module_values.append(module)
-    filters.append('(' + ' or '.join(module_filters) + ')')
-    values += module_values
+    if module_filters:
+      filters.append('(' + ' or '.join(module_filters) + ')')
+      values += module_values
 
     if request.has_offset():
       filters.append('RequestLogs.id < ?')

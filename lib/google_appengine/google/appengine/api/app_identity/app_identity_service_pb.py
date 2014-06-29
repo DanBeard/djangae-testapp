@@ -1917,12 +1917,19 @@ class SigningService(_server_stub_base_class):
 
   @classmethod
   def _MethodSignatures(cls):
+    """Returns a dict of {<method-name>: (<request-type>, <response-type>)}."""
     return {
       'SignForApp': (SignForAppRequest, SignForAppResponse),
       'GetPublicCertificatesForApp': (GetPublicCertificateForAppRequest, GetPublicCertificateForAppResponse),
       'GetServiceAccountName': (GetServiceAccountNameRequest, GetServiceAccountNameResponse),
       'GetAccessToken': (GetAccessTokenRequest, GetAccessTokenResponse),
       'GetDefaultGcsBucketName': (GetDefaultGcsBucketNameRequest, GetDefaultGcsBucketNameResponse),
+      }
+
+  @classmethod
+  def _StreamMethodSignatures(cls):
+    """Returns a dict of {<method-name>: (<request-type>, <stream-type>, <response-type>)}."""
+    return {
       }
 
   def __init__(self, *args, **kwargs):
@@ -2023,35 +2030,35 @@ class SigningService(_server_stub_base_class):
     See BaseRpcServer in rpcserver.py for details.
     """
     rpcserver._GetHandlerDecorator(
-        self.SignForApp.im_func,
+        getattr(self.SignForApp, 'im_func' if str is bytes else '__func__'),
         SignForAppRequest,
         SignForAppResponse,
         None,
-        'none')
+        'INTEGRITY')
     rpcserver._GetHandlerDecorator(
-        self.GetPublicCertificatesForApp.im_func,
+        getattr(self.GetPublicCertificatesForApp, 'im_func' if str is bytes else '__func__'),
         GetPublicCertificateForAppRequest,
         GetPublicCertificateForAppResponse,
         None,
-        'none')
+        'INTEGRITY')
     rpcserver._GetHandlerDecorator(
-        self.GetServiceAccountName.im_func,
+        getattr(self.GetServiceAccountName, 'im_func' if str is bytes else '__func__'),
         GetServiceAccountNameRequest,
         GetServiceAccountNameResponse,
         None,
-        'none')
+        'INTEGRITY')
     rpcserver._GetHandlerDecorator(
-        self.GetAccessToken.im_func,
+        getattr(self.GetAccessToken, 'im_func' if str is bytes else '__func__'),
         GetAccessTokenRequest,
         GetAccessTokenResponse,
         None,
-        'none')
+        'INTEGRITY')
     rpcserver._GetHandlerDecorator(
-        self.GetDefaultGcsBucketName.im_func,
+        getattr(self.GetDefaultGcsBucketName, 'im_func' if str is bytes else '__func__'),
         GetDefaultGcsBucketNameRequest,
         GetDefaultGcsBucketNameResponse,
         None,
-        'none')
+        'INTEGRITY')
 
 if _extension_runtime:
   pass

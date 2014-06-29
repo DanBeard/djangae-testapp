@@ -70,7 +70,7 @@ class ModuleConfigurationStub(object):
     self.handlers = handlers
     self.normalized_libraries = normalized_libraries or []
     self.env_variables = env_variables or []
-    self.version_id = '%s.%s' % (version, '12345')
+    self.version_id = '%s:%s.%s' % (module_name, version, '12345')
     self.is_backend = False
 
   def check_for_updates(self):
@@ -95,6 +95,7 @@ class ModuleFacade(module.Module):
         php_config=None,
         python_config=None,
         cloud_sql_config=None,
+        vm_config=None,
         default_version_port=8080,
         port_registry=dispatcher.PortRegistry(),
         request_data=None,
@@ -135,6 +136,7 @@ class AutoScalingModuleFacade(module.AutoScalingModule):
         php_config=None,
         python_config=None,
         cloud_sql_config=None,
+        unused_vm_config=None,
         default_version_port=8080,
         port_registry=dispatcher.PortRegistry(),
         request_data=None,
@@ -174,6 +176,7 @@ class ManualScalingModuleFacade(module.ManualScalingModule):
         php_config=None,
         python_config=None,
         cloud_sql_config=None,
+        vm_config=None,
         default_version_port=8080,
         port_registry=dispatcher.PortRegistry(),
         request_data=None,
@@ -214,6 +217,7 @@ class BasicScalingModuleFacade(module.BasicScalingModule):
         php_config=None,
         python_config=None,
         cloud_sql_config=None,
+        vm_config=None,
         default_version_port=8080,
         port_registry=dispatcher.PortRegistry(),
         request_data=None,
@@ -1602,11 +1606,11 @@ class TestManualScalingInstancePoolSuspendAndResume(unittest.TestCase):
 
   def test_already_suspended(self):
     self.module._suspended = True
-    self.assertRaises(request_info.ModuleAlreadyStoppedError,
+    self.assertRaises(request_info.VersionAlreadyStoppedError,
                       self.module.suspend)
 
   def test_already_resumed(self):
-    self.assertRaises(request_info.ModuleAlreadyStartedError,
+    self.assertRaises(request_info.VersionAlreadyStartedError,
                       self.module.resume)
 
   def test_suspend_instance(self):
@@ -2270,6 +2274,7 @@ class TestInteractiveCommandModule(unittest.TestCase):
         php_config=None,
         python_config=None,
         cloud_sql_config=None,
+        vm_config=None,
         default_version_port=8080,
         port_registry=dispatcher.PortRegistry(),
         request_data=None,

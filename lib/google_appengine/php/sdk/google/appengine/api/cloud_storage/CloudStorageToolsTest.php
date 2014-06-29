@@ -20,9 +20,6 @@
  */
 namespace google\appengine\api\cloud_storage;
 
-require_once 'google/appengine/api/cloud_storage/CloudStorageTools.php';
-require_once 'google/appengine/testing/ApiProxyTestBase.php';
-
 use google\appengine\testing\ApiProxyTestBase;
 use google\appengine\BlobstoreServiceError;
 use google\appengine\ImagesServiceError;
@@ -61,6 +58,11 @@ class CloudStorageToolsTest extends ApiProxyTestBase {
 
   public function tearDown() {
     $_SERVER = $this->_SERVER;
+
+    // Reset environmental variables.
+    putenv("SERVER_SOFTWARE=");
+    putenv("HTTP_HOST=");
+
     parent::tearDown();
   }
 
@@ -656,20 +658,39 @@ class CloudStorageToolsTest extends ApiProxyTestBase {
   }
 
   public function testGetPublicUrlInProduction() {
-    $bucket = "bucket";
-    $object = "object";
-    $gs_filename = sprintf("gs://%s/%s", $bucket, $object);
-    $host = "storage.googleapis.com";
     putenv("SERVER_SOFTWARE=Google App Engine/1.8.6");
 
-    // Get HTTPS URL
-    $expected = "https://storage.googleapis.com/bucket/object";
-    $actual = CloudStorageTools::getPublicUrl($gs_filename, true);
+    // Get HTTPS URL for bucket containing "." - should use the path format to
+    // avoid SSL certificate validation issue.
+    $expected = "https://storage.googleapis.com/bucket.name";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket.name", true);
+    $this->assertEquals($expected, $actual);
+    $expected = "https://storage.googleapis.com/bucket.name/object";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket.name/object", true);
     $this->assertEquals($expected, $actual);
 
-    // Get HTTP URL
-    $expected = "http://storage.googleapis.com/bucket/object";
-    $actual = CloudStorageTools::getPublicUrl($gs_filename, false);
+    // Get HTTP URL for bucket contain "." - should use the subdomain format.
+    $expected = "http://bucket.name.storage.googleapis.com/";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket.name/", false);
+    $this->assertEquals($expected, $actual);
+    $expected = "http://bucket.name.storage.googleapis.com/object";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket.name/object", false);
+    $this->assertEquals($expected, $actual);
+
+    // Get HTTPS URL for bucket without "." - should use the subdomain format.
+    $expected = "https://bucket.storage.googleapis.com/";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket", true);
+    $this->assertEquals($expected, $actual);
+    $expected = "https://bucket.storage.googleapis.com/object";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket/object", true);
+    $this->assertEquals($expected, $actual);
+
+    // Get HTTP URL for bucket without "." - should use the subdomain format.
+    $expected = "http://bucket.storage.googleapis.com/";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket", false);
+    $this->assertEquals($expected, $actual);
+    $expected = "http://bucket.storage.googleapis.com/object";
+    $actual = CloudStorageTools::getPublicUrl("gs://bucket/object", false);
     $this->assertEquals($expected, $actual);
   }
 
@@ -677,9 +698,8 @@ class CloudStorageToolsTest extends ApiProxyTestBase {
     $bucket = "bucket";
     $object = "object";
     $gs_filename = sprintf("gs://%s/%s", $bucket, $object);
-    $host = "localhost:8080";
     putenv("SERVER_SOFTWARE=Development/2.0");
-    putenv("HTTP_HOST=" . $host);
+    putenv("HTTP_HOST=localhost:8080");
 
     // Get HTTPS URL
     $expected = "http://localhost:8080/_ah/gcs/bucket/object";
@@ -689,6 +709,16 @@ class CloudStorageToolsTest extends ApiProxyTestBase {
     // Get HTTP URL
     $expected = "http://localhost:8080/_ah/gcs/bucket/object";
     $actual = CloudStorageTools::getPublicUrl($gs_filename, false);
+    $this->assertEquals($expected, $actual);
+  }
+
+  public function testGetPublicUrlEncoding() {
+    $bucket = "bucket";
+    $object = " %#?";
+    $gs_filename = sprintf("gs://%s/%s", $bucket, $object);
+
+    $expected = "https://bucket.storage.googleapis.com/%20%25%23%3F";
+    $actual = CloudStorageTools::getPublicUrl($gs_filename, true);
     $this->assertEquals($expected, $actual);
   }
 
@@ -700,35 +730,106 @@ class CloudStorageToolsTest extends ApiProxyTestBase {
     $this->assertEquals($expected, $actual);
   }
 
-  public function testGetFilenameFromInvalidBucketNames() {
-    $invalid_bucket_names = [
-        'BadBucketName',
-        '.another_bad_bucket',
-        'a',
-        'goog_bucket',
-        str_repeat('a', 224),
-        'a.bucket',
-        'foobar' . str_repeat('a', 64)
+  /**
+   * DataProvider for
+   * - testGetFilenameFromValidBucketNames
+   */
+  public function validBucketNames() {
+    return [
+        ['fancy-bucket_name1'],  // Must contain only [a-z0-9\-_].
+        ['1_bucket'],  // Must start with a number or letter.
+        ['bucket.1'],  // Must end with a number or letter.
+        ['foo'],  // Must be longer than 3 characters.
+        ['a.b'],  // Must be longer than 3 characters even with dots in name.
+        [str_repeat('a', 63)],  // Must not be longer than 63 characters.
+        // Must not exceed 222 characters with dots in name.
+        [implode('.', [str_repeat('a', 63), str_repeat('b', 63),
+                       str_repeat('c', 63), str_repeat('d', 30)])],
+        // Each component must not be exceed 63 characters.
+        ['a.' . str_repeat('b', 63)],
+        ['256.1.1.1'], // Must not be an IP address.
+        ['foo.goog'],  // Must not begin with "goog".
     ];
-    foreach ($invalid_bucket_names as $bucket) {
-      $this->setExpectedException(
-          "\InvalidArgumentException",
-          sprintf("Invalid cloud storage bucket name '%s'", $bucket));
-      CloudStorageTools::getFilename($bucket, 'foo.txt');
-    }
   }
 
-  public function testGetFilenameFromInvalidObjecNames() {
-    $invalid_object_names = [
-        "WithCarriageReturn\r",
-        "WithLineFeed\n",
+  /**
+   * DataProvider for
+   * - testGetFilenameFromInvalidBucketNames
+   */
+  public function invalidBucketNames() {
+    return [
+        ['BadBucketName'],  // Must contain only [a-z0-9\-_].
+        ['.another_bad_bucket'],  // Must start with a number or letter.
+        ['another_bad_bucket_'],  // Must end with a number or letter.
+        ['a'],  // Must be longer than 3 characters.
+        ['a.'],  // Must be longer than 3 characters even with dots in name.
+        [str_repeat('a', 64)],  // Must not be longer than 63 characters.
+        // Must not exceed 222 characters with dots in name.
+        [implode('.', [str_repeat('a', 63), str_repeat('b', 63),
+                       str_repeat('c', 63), str_repeat('d', 31)])],
+        // Each component must not be exceed 63 characters.
+        ['a.' . str_repeat('b', 64)],
+        ['192.168.1.1'], // Must not be an IP address.
+        ['goog_bucket'],  // Must not begin with "goog".
     ];
-    foreach ($invalid_object_names as $object) {
-      $this->setExpectedException(
-          "\InvalidArgumentException",
-          sprintf("Invalid cloud storage object name '%s'", $object));
-      CloudStorageTools::getFilename('foo', $object);
-    }
+  }
+
+  /**
+   * DataProvider for
+   * - testGetFilenameFromInvalidObjectNames
+   */
+  public function invalidObjectNames() {
+    return [
+        ["WithCarriageReturn\r"],
+        ["WithLineFeed\n"],
+        ["WithFormFeed\f"],
+        ["WithverticalTab\v"],
+    ];
+  }
+
+  /**
+   * @dataProvider validBucketNames
+   */
+  public function testGetFilenameFromValidBucketNames($bucket) {
+    CloudStorageTools::getFilename($bucket, 'foo.txt');
+  }
+
+  /**
+   * @dataProvider invalidBucketNames
+   */
+  public function testGetFilenameFromInvalidBucketNames($bucket) {
+    $this->setExpectedException(
+        "\InvalidArgumentException",
+        sprintf("Invalid cloud storage bucket name '%s'", $bucket));
+     CloudStorageTools::getFilename($bucket, 'foo.txt');
+  }
+
+  /**
+   * @dataProvider invalidObjectNames
+   */
+  public function testGetFilenameFromInvalidObjecNames($object) {
+    $this->setExpectedException(
+        "\InvalidArgumentException",
+        sprintf("Invalid cloud storage object name '%s'", $object));
+    CloudStorageTools::getFilename('foo', $object);
+  }
+
+  public function testParseFilenameWithBucketAndObject() {
+    $gs_filename = 'gs://bucket/object';
+
+    $this->assertEquals(true,
+        CloudStorageTools::parseFilename($gs_filename, $bucket, $object));
+    $this->assertEquals('bucket', $bucket);
+    $this->assertEquals('/object', $object);
+  }
+
+  public function testParseFilenameWithBucketOnly() {
+    $gs_filename = 'gs://bucket';
+
+    $this->assertEquals(true,
+        CloudStorageTools::parseFilename($gs_filename, $bucket, $object));
+    $this->assertEquals('bucket', $bucket);
+    $this->assertEquals(null, $object);
   }
 }
 

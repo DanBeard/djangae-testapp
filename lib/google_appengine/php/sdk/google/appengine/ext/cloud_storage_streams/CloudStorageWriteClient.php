@@ -22,8 +22,6 @@
 
 namespace google\appengine\ext\cloud_storage_streams;
 
-require_once 'google/appengine/ext/cloud_storage_streams/CloudStorageClient.php';
-
 // TODO: Retry on transient errors.
 
 final class CloudStorageWriteClient extends CloudStorageClient {
@@ -70,8 +68,20 @@ final class CloudStorageWriteClient extends CloudStorageClient {
     }
     $headers = array_merge($headers, $token_header);
 
-    if (array_key_exists("Content-Type", $this->context_options)) {
-      $headers["Content-Type"] = $this->context_options["Content-Type"];
+    // TODO: b/13132830: Remove once feature releases.
+    if (!ini_get('google_app_engine.enable_additional_cloud_storage_headers')) {
+      foreach (static::$METADATA_HEADERS as $key) {
+        // Leave Content-Type since it has been supported.
+        if ($key != 'Content-Type') {
+          unset($this->context_options[$key]);
+        }
+      }
+    }
+
+    foreach (static::$METADATA_HEADERS as $key) {
+      if (array_key_exists($key, $this->context_options)) {
+        $headers[$key] = $this->context_options[$key];
+      }
     }
 
     if (array_key_exists("acl", $this->context_options)) {
@@ -98,6 +108,7 @@ final class CloudStorageWriteClient extends CloudStorageClient {
           return false;
         }
         $headers['x-goog-meta-' . $name] = $value;
+        $this->metadata[$name] = $value;
       }
     }
 
@@ -181,6 +192,22 @@ final class CloudStorageWriteClient extends CloudStorageClient {
    */
   public function close() {
     $this->writeBufferToGS(true);
+  }
+
+  public function getMetaData() {
+    if (array_key_exists("metadata", $this->context_options)) {
+      return $this->context_options["metadata"];
+    }
+
+    return [];
+  }
+
+  public function getContentType() {
+    if (array_key_exists("Content-Type", $this->context_options)) {
+      return $this->context_options["Content-Type"];
+    }
+
+    return null;
   }
 
   private function writeBufferToGS($complete = false) {

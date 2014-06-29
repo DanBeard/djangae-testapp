@@ -19,10 +19,6 @@
 
 namespace google\appengine\api\mail;
 
-require_once 'google/appengine/api/mail_service_pb.php';
-require_once 'google/appengine/runtime/ApiProxy.php';
-require_once 'google/appengine/runtime/ApplicationError.php';
-
 use google\appengine\MailAttachment;
 use google\appengine\MailHeader;
 use google\appengine\MailMessage;
@@ -65,7 +61,8 @@ abstract class BaseMessage {
                                         'textBody' => 'setTextBody',
                                         'htmlBody' => 'setHtmlBody',
                                         'header' => 'addHeaderArray',
-                                        'attachment' => 'addAttachmentArray');
+                                        'attachment' => 'addAttachmentArray',
+                                        'attachments' => 'addAttachmentsArray');
 
   /**
    * Construct an instance of Message.
@@ -89,7 +86,8 @@ abstract class BaseMessage {
             $func_name = $allowed_functions[$key];
             call_user_func(array($this, $func_name), $value);
           } else {
-            $error = sprintf("Message received an invalid option: %s", $key);
+            $error = sprintf("Message received an invalid option: %s",
+                             htmlspecialchars($key));
             throw new \InvalidArgumentException($error);
           }
         }
@@ -105,12 +103,16 @@ abstract class BaseMessage {
    *
    * @param string $filename Filename of the attachment.
    * @param mixed $data File data of the attachment.
+   * @param string $content_id Optional Content-ID header value of the
+   * attachment. Must be enclosed by angle brackets (<>).
    * @throws \InvalidArgumentException If the input is not an array or if the
    * attachment type is invalid (i.e. the filename is not a string, or the
    * file extension is blacklisted).
    */
-  public function addAttachment($filename, $data) {
-    $this->addAttachmentArray(array($filename => $data));
+  public function addAttachment($filename, $data, $content_id = null) {
+    $this->addAttachmentsArray([["name" => $filename,
+                                 "data" => $data,
+                                 "content_id" => $content_id]]);
   }
 
   /**
@@ -121,8 +123,12 @@ abstract class BaseMessage {
    * @throws \InvalidArgumentException If the input is not an array or if the
    * attachment type is invalid (i.e. the filename is not a string, or the
    * file extension is blacklisted).
+   * @deprecated
    */
   public function addAttachmentArray($attach_array) {
+    syslog(LOG_WARNING, "Both \$options['attachment'] and " .
+        "addAttachmentArray() are deprecated. Use \$options['attachments'] " .
+        "and addAttachmentsArray() instead.");
     if (!is_array($attach_array)) {
       $error = sprintf("Input is not an array (Actual type: %s).",
                        gettype($attach_array));
@@ -140,6 +146,43 @@ abstract class BaseMessage {
       $new_attachment = $this->message->addAttachment();
       $new_attachment->setFilename($filename);
       $new_attachment->setData($data);
+    }
+  }
+
+  /**
+   * Adds an array of attachments to the Message object.
+   *
+   * @param array Array of arrays that represent attachments. Each attachment
+   * array supports name, data, and (optionally) content_id keys.  Example:
+   * [['name' => 'foo.jpg', 'data' => 'data', 'content_id' => '<foo>']]
+   * @throws \InvalidArgumentException If the input is not an array or if the
+   * attachment type is invalid (i.e. the filename is not a string, or the
+   * file extension is blacklisted).
+   */
+  public function addAttachmentsArray($attach_array) {
+    if (!is_array($attach_array)) {
+      throw new \InvalidArgumentException(sprintf(
+        "Input is not an array (Actual type: %s).", gettype($attach_array)));
+    }
+
+    $error = "";
+    foreach($attach_array as $attachment) {
+      if (!$this->checkValidAttachment($attachment["name"], $error)) {
+        throw new \InvalidArgumentException($error);
+      }
+    }
+
+    foreach($attach_array as $attachment) {
+      $new_attachment = $this->message->addAttachment();
+      $new_attachment->setFilename($attachment["name"]);
+      $new_attachment->setData($attachment["data"]);
+      if (isset($attachment["content_id"])) {
+        if (!preg_match("/^\<.*\>$/", $attachment["content_id"])) {
+          throw new \InvalidArgumentException(
+            "Content-id must begin and end with angle brackets.");
+        }
+        $new_attachment->setContentId($attachment["content_id"]);
+      }
     }
   }
 
@@ -244,7 +287,9 @@ abstract class BaseMessage {
     } else if (!in_array(strtolower($key), self::$allowed_headers)) {
       // Array keys don't have consistent case.
       $error = sprintf("Input header '%s: %s' is not whitelisted for use with" .
-                       " the Google App Engine Mail Service.", $key, $value);
+                       " the Google App Engine Mail Service.",
+                       htmlspecialchars($key),
+                       htmlspecialchars($value));
       return false;
     }
     return true;
@@ -282,7 +327,7 @@ abstract class BaseMessage {
       case ErrorCode::UNAUTHORIZED_SENDER:
         $error = sprintf("Mail Service Error: Sender (%s) is not an " .
                          "authorized email address.",
-                         $this->message->getSender());
+                         htmlspecialchars($this->message->getSender()));
         throw new \InvalidArgumentException($error);
       case ErrorCode::INVALID_ATTACHMENT_TYPE:
         throw new \InvalidArgumentException(
@@ -319,7 +364,8 @@ abstract class BaseMessage {
    */
   public function setReplyTo($email) {
     if (!$this->checkValidEmail($email)) {
-      throw new \InvalidArgumentException("Invalid reply-to: ". $email);
+      throw new \InvalidArgumentException(
+          "Invalid reply-to: ". htmlspecialchars($email));
     }
     $this->message->setReplyto($email);
   }
@@ -333,7 +379,8 @@ abstract class BaseMessage {
    */
   public function setSender($email) {
     if (!$this->checkValidEmail($email)) {
-      throw new \InvalidArgumentException("Invalid sender: ". $email);
+      throw new \InvalidArgumentException(
+          "Invalid sender: ". htmlspecialchars($email));
     }
     $this->message->setSender($email);
   }
