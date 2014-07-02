@@ -10,10 +10,13 @@ if __name__ == "__main__":
 
     from djangae.sandbox import activate
 
-    if not "--sandbox" in sys.argv:
-        sandbox = "local"
+    if "--sandbox" in sys.argv:
+        sandbox_arg_index = sys.argv.index("--sandbox")
+        sandbox = sys.argv[sandbox_arg_index + 1]
+        del sys.argv[sandbox_arg_index + 1]
+        del sys.argv[sandbox_arg_index]
     else:
-        sandbox = sys.argv[sys.argv.index("--sandbox") + 1]
+        sandbox = "local"
 
     with activate(sandbox):
         from django.core.management import execute_from_command_line

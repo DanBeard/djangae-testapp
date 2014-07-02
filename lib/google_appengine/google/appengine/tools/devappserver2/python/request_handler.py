@@ -124,6 +124,7 @@ class RequestHandler(object):
         'TZ': 'UTC',
         'wsgi.multithread': config.threadsafe,
         }
+    import pdb; pdb.set_trace()
     self._command_globals = {}  # Use to evaluate interactive requests.
     self.environ_template.update((env.key, env.value) for env in config.environ)
 
