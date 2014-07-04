@@ -9,3 +9,5 @@ djangae_user:
   username: [iexact]
 model_forms_post:
   posted: [day, year, month]
+timezones_event:
+  dt: [year, month]
