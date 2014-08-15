@@ -2,7 +2,7 @@ application: djangae-testapp
 version: 1
 runtime: python27
 api_version: 1
-threadsafe: no
+threadsafe: yes
 
 builtins:
 - remote_api: on
