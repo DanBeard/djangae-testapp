@@ -12,4 +12,4 @@ djangae_user:
 model_forms_post:
   posted: [day, year, month]
 timezones_event:
-  dt: [year]
+  dt: [year, month]
