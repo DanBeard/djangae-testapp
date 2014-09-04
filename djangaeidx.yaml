@@ -5,7 +5,11 @@ auth_user:
   username: [iexact]
 basic_article:
   pub_date: [year, month, day, week_day]
+djangae_testuser:
+  username: [iexact]
 djangae_user:
   username: [iexact]
 model_forms_post:
   posted: [day, year, month]
+timezones_event:
+  dt: [year]
