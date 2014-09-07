@@ -52,5 +52,5 @@ UpdateOnlyFieldsTests.test_update_fields_fk_defer = expectedFailure(UpdateOnlyFi
 # so I'm skipping it. TODO: Check and see if this exists in Django trunk and file a bug
 OneToOneTests.test_foreign_key = expectedFailure(OneToOneTests.test_foreign_key)
 
-ProxyModelTests.test_with_data = expectedFailure(ProxyModelTests.test_with_data) #Attempts a join
+OldFormForXTests.test_with_data = expectedFailure(OldFormForXTests.test_with_data) #Attempts a join
 ProxyModelTests.test_proxy_bug = expectedFailure(ProxyModelTests.test_proxy_bug) #Attempts a join
