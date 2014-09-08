@@ -11,5 +11,7 @@ djangae_user:
   username: [iexact]
 model_forms_post:
   posted: [day, year, month]
+proxy_models_bug:
+  version: [icontains]
 timezones_event:
   dt: [year, month]

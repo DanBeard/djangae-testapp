@@ -23,6 +23,11 @@ indexes:
 
 - kind: auth_permission
   properties:
+  - name: content_type_id
+  - name: codename
+
+- kind: auth_permission
+  properties:
   - name: username
   - name: codename
   - name: content_type_id
