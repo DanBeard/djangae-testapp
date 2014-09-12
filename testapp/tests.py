@@ -1,32 +1,38 @@
 import os
 import tempfile
+import sys
 
 TEMP_DIR = tempfile.mkdtemp(prefix='django_')
 os.environ['DJANGO_TEST_TEMP_DIR'] = TEMP_DIR
 
-from .django_model_tests.model_forms.tests import *
-from .django_model_tests.model_forms.models import *
-from .django_model_tests.get_or_create.tests import *
-from .django_model_tests.get_or_create.models import *
-from .django_model_tests.basic.tests import *
-from .django_model_tests.basic.models import *
-from .django_model_tests.custom_managers.tests import *
-from .django_model_tests.custom_managers.models import *
-from .django_model_tests.custom_pk.tests import *
-from .django_model_tests.custom_pk.models import *
-from .django_model_tests.delete.tests import *
-from .django_model_tests.delete.models import *
-from .django_model_tests.one_to_one.tests import *
-from .django_model_tests.one_to_one.models import *
-from .django_model_tests.proxy_models.tests import *
-from .django_model_tests.proxy_models.models import *
-from .django_model_tests.update.tests import *
-from .django_model_tests.update.models import *
-from .django_model_tests.update_only_fields.tests import *
-from .django_model_tests.update_only_fields.models import *
-from .django_model_tests.ordering.tests import *
-from .django_model_tests.ordering.models import *
+try:
+    original_path = sys.path[:]
+    sys.path.insert(0, os.path.join(os.path.abspath(os.path.dirname(__file__)), "django_model_tests"))
 
+    for test_folder in (
+        "model_forms",
+        "get_or_create",
+        "basic",
+        "custom_managers",
+        "custom_pk",
+        "delete",
+        "one_to_one",
+        "proxy_models",
+        "update",
+        "update_only_fields",
+        "ordering"):
+
+        mod = __import__(test_folder, globals(), locals(), fromlist=["tests", "models"])
+
+        for f in ("tests", "models"):
+            fi = getattr(mod, f)
+            for k in dir(fi):
+                if not k.startswith("__"):
+                    attr = getattr(fi, k)
+                    globals()[k] = attr
+
+finally:
+    sys.path = original_path
 
 from unittest import expectedFailure
 
@@ -43,6 +49,9 @@ SimpleTest.test_nonempty_update_with_inheritance = expectedFailure(SimpleTest.te
 UniqueTest.test_inherited_unique = expectedFailure(UniqueTest.test_inherited_unique) # Attempts a join
 UpdateOnlyFieldsTests.test_select_related_only_interaction = expectedFailure(UpdateOnlyFieldsTests.test_select_related_only_interaction) # Cross-table select
 UpdateOnlyFieldsTests.test_update_fields_fk_defer = expectedFailure(UpdateOnlyFieldsTests.test_update_fields_fk_defer)
+GetOrCreateThroughManyToMany.test_create_get_or_create = expectedFailure(GetOrCreateThroughManyToMany.test_create_get_or_create) #M2M
+GetOrCreateThroughManyToMany.test_get_get_or_create = expectedFailure(GetOrCreateThroughManyToMany.test_get_get_or_create) #M2M
+GetOrCreateThroughManyToMany.test_something = expectedFailure(GetOrCreateThroughManyToMany.test_something) #M2M
 
 #This is a weird one. The Django test does this:
 #         assert_filter_waiters(restaurant=self.p1.pk)
