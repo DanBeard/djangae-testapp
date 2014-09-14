@@ -28,16 +28,19 @@ Image is a result of "docker build path/to/Dockerfile" command.
 Container is a result of "docker run image_tag" command.
 ImageOptions and ContainerOptions allow to pass parameters to these commands.
 
-Versions 1.6 and 1.10 of docker remote API are supported.
+Versions 1.9 and 1.10 of docker remote API are supported.
 """
 
 from collections import namedtuple
 
 import logging
 import re
+import threading
+import urlparse
 
 import google
 import docker
+import requests
 
 
 _SUCCESSFUL_BUILD_PATTERN = re.compile(
@@ -48,7 +51,7 @@ class ImageOptions(namedtuple('ImageOptionsT',
                               ['dockerfile_dir', 'tag', 'nocache', 'rm'])):
   """Options for building Docker Images."""
 
-  def __new__(cls, dockerfile_dir=None, tag=None, nocache=False, rm=False):
+  def __new__(cls, dockerfile_dir=None, tag=None, nocache=False, rm=True):
     """This method is redefined to provide default values for namedtuple.
 
     Args:
@@ -61,7 +64,8 @@ class ImageOptions(namedtuple('ImageOptionsT',
       nocache: boolean, True if cache should not be used when building the
           image.
       rm: boolean, True if intermediate images should be removed after a
-          successful build.
+          successful build. Default value is set to True because this is the
+          default value used by "docker build" command.
 
     Returns:
       ImageOptions object.
@@ -114,6 +118,10 @@ class ContainerError(Error):
   """Container related erorrs."""
 
 
+class DockerDaemonConnectionError(Error):
+  """Raised if the docker client can't connect to the docker daemon."""
+
+
 class BaseImage(object):
   """Abstract base class for Docker images."""
 
@@ -125,10 +133,21 @@ class BaseImage(object):
           Docker daemon.
       image_opts: an instance of ImageOptions class describing the parameters
           passed to docker commands.
+
+    Raises:
+      DockerDaemonConnectionError: If the docker daemon isn't responding.
     """
     self._docker_client = docker_client
     self._image_opts = image_opts
     self._id = None
+
+    try:
+      self._docker_client.ping()
+    except requests.exceptions.ConnectionError:
+      raise DockerDaemonConnectionError(
+          'Couldn\'t connect to the docker daemon at %s. Please check that '
+          'the docker daemon is running and that you have specified the '
+          'correct docker host.' % self._docker_client.base_url)
 
   def Build(self):
     """Calls "docker build" if needed."""
@@ -198,34 +217,37 @@ class Image(BaseImage):
         path=self._image_opts.dockerfile_dir,
         tag=self.tag,
         quiet=False, fileobj=None, nocache=self._image_opts.nocache,
-        rm=self._image_opts.rm, stream=False)
+        rm=self._image_opts.rm)
 
-    if isinstance(build_res, tuple):
-      # Older API returns pair (image_id, warnings)
-      self._id = build_res[0]
-    else:
-      # Newer API returns stream_helper generator where last message is saying
-      # about the success of the build.
-      for x in build_res:
-        m = _SUCCESSFUL_BUILD_PATTERN.match(x)
-        if m:
-          self._id = m.group(1)
-          break
+    log_lines = [x.strip() for x in build_res]
+    if not log_lines:
+      logging.error('Error building docker image %s [with no output]', self.tag)
+      raise ImageError
 
-    if self.id:
+    m = _SUCCESSFUL_BUILD_PATTERN.match(log_lines[-1])
+
+    if m:  # The build was successful.
+      self._id = m.group(1)
+      for line in log_lines:
+        logging.debug(line)
       logging.info('Image %s built, id = %s', self.tag, self.id)
     else:
-      # TODO: figure out the build error.
-      raise ImageError('There was a build error for the image %s.', self.tag)
+      logging.error('Error building docker image %s', self.tag)
+      for line in log_lines:
+        logging.error(line)
+      raise ImageError
 
   def Remove(self):
     """Calls "docker rmi"."""
     if self._id:
       try:
         self._docker_client.remove_image(self.id)
-      except docker.errors.APIError:
-        logging.warning('Image %s cannot be removed because it is tagged in '
-                        'multiple repositories. Use -f to remove it.', self.id)
+      except docker.errors.APIError as e:
+        logging.warning('Image %s (id=%s) cannot be removed: %s. Try cleaning '
+                        'up old containers that can be listed with '
+                        '"docker ps -a" and removing the image again with '
+                        '"docker rmi IMAGE_ID".',
+                        self.tag, self.id, e)
       self._id = None
 
 
@@ -265,7 +287,7 @@ class PrebuiltImage(BaseImage):
         name=self.tag, quiet=True, all=False, viz=False)
 
     if not images:
-      raise ImageError('Image with tag %s was not found', self.tag)
+      raise ImageError('Image with tag %s was not found' % self.tag)
 
     # TODO: check if it's possible to have more than one image returned.
     self._id = images[0]
@@ -290,6 +312,17 @@ def CreateImage(docker_client, image_opts):
   return image(docker_client, image_opts)
 
 
+def GetDockerHost(docker_client):
+  parsed_url = urlparse.urlparse(docker_client.base_url)
+
+  # Socket url schemes look like: unix:// or http+unix://.
+  # If the user is running docker locally and connecting over a socket, we
+  # should just use localhost.
+  if 'unix' in parsed_url.scheme:
+    return 'localhost'
+  return parsed_url.hostname
+
+
 class Container(object):
   """Docker Container."""
 
@@ -306,12 +339,17 @@ class Container(object):
 
     self._image = CreateImage(docker_client, container_opts.image_opts)
     self._id = None
-    self._host = None
+    self._host = GetDockerHost(self._docker_client)
+    self._container_host = None
     self._port = None
     # Port bindings will be set to a dictionary mapping exposed ports
     # to the interface they are bound to. This will be populated from
     # the container options passed when the container is started.
     self._port_bindings = None
+
+    # Use the daemon flag in case we leak these threads.
+    self._logs_listener = threading.Thread(target=self._ListenToLogs)
+    self._logs_listener.daemon = True
 
   def Start(self):
     """Builds an image (if necessary) and runs a container.
@@ -344,6 +382,9 @@ class Container(object):
         dns=None,
         network_disabled=False,
         name=self.name)
+    # create_container returns a dict sometimes.
+    if isinstance(self.id, dict):
+      self._id = self.id.get('Id')
     logging.info('Container %s created.', self.id)
 
     self._docker_client.start(
@@ -356,13 +397,15 @@ class Container(object):
         # in start.
         volumes_from=self._container_opts.volumes_from)
 
+    self._logs_listener.start()
+
     if not port_bindings:
       # Nothing to inspect
       return
 
     container_info = self._docker_client.inspect_container(self._id)
     network_settings = container_info['NetworkSettings']
-    self._host = network_settings['IPAddress']
+    self._container_host = network_settings['IPAddress']
     self._port_bindings = {
         port: int(network_settings['Ports']['%d/tcp' % port][0]['HostPort'])
         for port in port_bindings
@@ -371,7 +414,7 @@ class Container(object):
   def Stop(self):
     """Stops a running container, removes it and underlying image if needed."""
     if self._id:
-      self._docker_client.stop(self.id)
+      self._docker_client.kill(self.id)
       self._docker_client.remove_container(self.id, v=False,
                                            link=False)
       self._id = None
@@ -392,8 +435,7 @@ class Container(object):
   @property
   def host(self):
     """Host the container can be reached at by the host (i.e. client) system."""
-    # TODO: make this work when Dockerd is running on GCE.
-    return 'localhost'
+    return self._host
 
   @property
   def port(self):
@@ -413,12 +455,24 @@ class Container(object):
   @property
   def container_addr(self):
     """An address the container can be reached at by another container."""
-    return '%s:%d' % (self._host, self._container_opts.port)
+    return '%s:%d' % (self._container_host, self._container_opts.port)
 
   @property
   def name(self):
     """String, identifying a container. Required for data containers."""
     return self._container_opts.name
+
+  def _ListenToLogs(self):
+    """Logs all output from the docker container.
+
+    The docker.Client.logs method returns a generator that yields log lines.
+    This method iterates over that generator and outputs those log lines to
+    the devappserver2 logs.
+    """
+    log_lines = self._docker_client.logs(container=self.id, stream=True)
+    for line in log_lines:
+      line = line.strip()
+      logging.debug('Container: %s: %s', self.id[0:12], line)
 
   def __enter__(self):
     """Makes Container usable with "with" statement."""
