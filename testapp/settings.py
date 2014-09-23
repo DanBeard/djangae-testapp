@@ -28,10 +28,9 @@ TEMPLATE_DEBUG = True
 
 ALLOWED_HOSTS = []
 
-
 # Application definition
 
-INSTALLED_APPS = (
+INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
     'djangae.contrib.auth',
@@ -44,7 +43,47 @@ INSTALLED_APPS = (
     'django.contrib.formtools',
     'djangae',
     'testapp'
-)
+]
+
+import sys
+import tempfile
+sys.path.insert(0, "django_tests")
+
+TEMP_DIR = tempfile.mkdtemp(prefix='django_')
+os.environ['DJANGO_TEST_TEMP_DIR'] = TEMP_DIR
+
+TO_TEST = [
+    "basic",
+    "bulk_create",
+    "custom_managers",
+    "custom_pk",
+    "dates",
+    "datetimes",
+    "defer",
+    "delete",
+    "empty",
+    "file_uploads",
+    "force_insert_update",
+    "get_or_create",
+    "lookup",
+    "many_to_one",
+    "many_to_one_null",
+    "max_lengths",
+    "model_forms",
+    "model_inheritance",
+    "null_queries",
+    "one_to_one",
+    "or_lookups",
+    "ordering",
+    "proxy_models",
+    "update",
+]
+
+for folder in TO_TEST:
+    if os.path.exists(os.path.join("django_tests", folder, "tests.py")):
+        INSTALLED_APPS.append(folder)
+
+INSTALLED_APPS = tuple(INSTALLED_APPS)
 
 MIDDLEWARE_CLASSES = (
     'django.contrib.sessions.middleware.SessionMiddleware',

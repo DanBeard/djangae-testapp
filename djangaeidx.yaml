@@ -9,8 +9,13 @@ djangae_testuser:
   username: [iexact]
 djangae_user:
   username: [iexact]
+lookup_article:
+  headline: [contains, endswith]
+  !!python/unicode 'id': [iexact]
 model_forms_post:
   posted: [day, year, month]
+or_lookups_article:
+  headline: [contains]
 proxy_models_bug:
   version: [icontains]
 timezones_event:
