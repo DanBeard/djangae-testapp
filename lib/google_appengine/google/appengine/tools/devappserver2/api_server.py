@@ -207,7 +207,12 @@ class APIServer(wsgi_server.WsgiServer):
         # Even if the runtime is Python, the exception may be unpicklable if
         # it requires importing a class blocked by the sandbox so just send
         # back the exception representation.
-        e = RuntimeError(repr(e))
+        # But due to our use of the remote API, at least some apiproxy errors
+        # are generated in the Dev App Server main instance and not in the
+        # language runtime and wrapping them causes different behavior from
+        # prod so don't wrap them.
+        if not isinstance(e, apiproxy_errors.Error):
+          e = RuntimeError(repr(e))
       # While not strictly necessary for ApplicationError, do this to limit
       # differences with remote_api:handler.py.
       response.set_exception(pickle.dumps(e))
@@ -525,7 +530,7 @@ def test_setup_stubs(
     mail_smtp_password='',
     mail_enable_sendmail=False,
     mail_show_mail_body=False,
-    mail_allow_tls=False,
+    mail_allow_tls=True,
     matcher_prospective_search_path='/dev/null',
     search_index_path=None,
     taskqueue_auto_run_tasks=False,

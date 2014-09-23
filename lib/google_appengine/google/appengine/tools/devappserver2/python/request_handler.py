@@ -124,7 +124,6 @@ class RequestHandler(object):
         'TZ': 'UTC',
         'wsgi.multithread': config.threadsafe,
         }
-
     self._command_globals = {}  # Use to evaluate interactive requests.
     self.environ_template.update((env.key, env.value) for env in config.environ)
 
