@@ -15,7 +15,7 @@ lookup_article:
 model_forms_post:
   posted: [day, year, month]
 or_lookups_article:
-  headline: [contains]
+  headline: [contains, iexact]
 proxy_models_bug:
   version: [icontains]
 timezones_event:
