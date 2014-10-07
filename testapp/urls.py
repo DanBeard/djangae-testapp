@@ -1,3 +1,4 @@
+import sys
 from django.conf.urls import patterns, include, url
 
 from django.contrib import admin
@@ -11,5 +12,9 @@ urlpatterns = patterns('',
     # url(r'^blog/', include('blog.urls')),
     url(r'^_ah/', include(djangae.urls)),
     url(r'^admin/', include(admin.site.urls)),
-    url(r'^file_uploads/', include("file_uploads.urls"))
+
 )
+
+
+if "test" in sys.argv:
+    urlpatterns += patterns('', url(r'^file_uploads/', include("file_uploads.urls")))

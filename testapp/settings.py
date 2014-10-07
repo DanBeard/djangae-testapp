@@ -7,7 +7,7 @@ https://docs.djangoproject.com/en/dev/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/dev/ref/settings/
 """
-
+import sys
 from djangae.settings_base import *
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
@@ -45,43 +45,44 @@ INSTALLED_APPS = [
     'testapp'
 ]
 
-import sys
-import tempfile
-sys.path.insert(0, "django_tests")
+if "test" in sys.argv:
+    import sys
+    import tempfile
+    sys.path.insert(0, "django_tests")
 
-TEMP_DIR = tempfile.mkdtemp(prefix='django_')
-os.environ['DJANGO_TEST_TEMP_DIR'] = TEMP_DIR
+    TEMP_DIR = tempfile.mkdtemp(prefix='django_')
+    os.environ['DJANGO_TEST_TEMP_DIR'] = TEMP_DIR
 
-TO_TEST = [
-    "basic",
-    "bulk_create",
-    "custom_managers",
-    "custom_pk",
-    "dates",
-    "datetimes",
-    "defer",
-    "delete",
-    "empty",
-    "file_uploads",
-    "force_insert_update",
-    "get_or_create",
-    "lookup",
-    "many_to_one",
-    "many_to_one_null",
-    "max_lengths",
-    "model_forms",
-    "model_inheritance",
-    "null_queries",
-    "one_to_one",
-    "or_lookups",
-    "ordering",
-    "proxy_models",
-    "update",
-]
+    TO_TEST = [
+        "basic",
+        "bulk_create",
+        "custom_managers",
+        "custom_pk",
+        "dates",
+        "datetimes",
+        "defer",
+        "delete",
+        "empty",
+        "file_uploads",
+        "force_insert_update",
+        "get_or_create",
+        "lookup",
+        "many_to_one",
+        "many_to_one_null",
+        "max_lengths",
+        "model_forms",
+        "model_inheritance",
+        "null_queries",
+        "one_to_one",
+        "or_lookups",
+        "ordering",
+        "proxy_models",
+        "update",
+    ]
 
-for folder in TO_TEST:
-    if os.path.exists(os.path.join("django_tests", folder, "tests.py")):
-        INSTALLED_APPS.append(folder)
+    for folder in TO_TEST:
+        if os.path.exists(os.path.join("django_tests", folder, "tests.py")):
+            INSTALLED_APPS.append(folder)
 
 INSTALLED_APPS = tuple(INSTALLED_APPS)
 

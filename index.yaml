@@ -160,6 +160,49 @@ indexes:
   - name: line_number
   - name: summary
 
+- kind: djangae_group
+  properties:
+  - name: name
+  - name: permissions
+
+- kind: djangae_user
+  properties:
+  - name: __key__
+    direction: desc
+  - name: date_joined
+  - name: email
+  - name: first_name
+  - name: groups
+  - name: is_active
+  - name: is_staff
+  - name: is_superuser
+  - name: last_login
+  - name: last_name
+  - name: password
+  - name: user_permissions
+  - name: username
+
+- kind: djangae_user
+  properties:
+  - name: date_joined
+  - name: email
+  - name: first_name
+  - name: groups
+  - name: is_active
+  - name: is_staff
+  - name: is_superuser
+  - name: last_login
+  - name: last_name
+  - name: password
+  - name: user_permissions
+  - name: username
+
+- kind: django_admin_log
+  properties:
+  - name: user_id
+  - name: action_time
+    direction: desc
+
 - kind: django_content_type
   properties:
   - name: app_label
