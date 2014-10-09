@@ -14,7 +14,7 @@ djangae_user:
   username: [iexact]
 lookup_article:
   headline: [contains, endswith, startswith]
-  !!python/unicode 'id': [iexact]
+  id: [iexact]
   pub_date: [startswith]
 many_to_one_article:
   headline: [startswith]

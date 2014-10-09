@@ -87,6 +87,7 @@ if "test" in sys.argv:
 INSTALLED_APPS = tuple(INSTALLED_APPS)
 
 MIDDLEWARE_CLASSES = (
+    'djangae.contrib.security.middleware.AppEngineSecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
