@@ -33,7 +33,7 @@ ALLOWED_HOSTS = []
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
-    'djangae.contrib.auth',
+    'djangae.contrib.gauth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.sites',
@@ -130,6 +130,6 @@ USE_TZ = False
 STATIC_ROOT = BASE_DIR + 'static'
 STATIC_URL = '/static/'
 
-AUTH_USER_MODEL = 'djangae.User'
+AUTH_USER_MODEL = 'djangae.GaeDatastoreUser'
 GENERATE_SPECIAL_INDEXES_DURING_TESTING = True
 COMPLETE_FLUSH_WHILE_TESTING = True
