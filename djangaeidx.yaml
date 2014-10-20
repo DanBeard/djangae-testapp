@@ -25,7 +25,7 @@ many_to_one_reporter:
 model_forms_post:
   posted: [day, year, month]
 or_lookups_article:
-  headline: [contains, iexact, startswith]
+  headline: [contains, iexact, startswith, icontains]
 proxy_models_bug:
   version: [icontains]
 timezones_event:

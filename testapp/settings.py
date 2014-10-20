@@ -63,7 +63,6 @@ if "test" in sys.argv:
         "defer",
         "delete",
         "empty",
-        "file_uploads",
         "force_insert_update",
         "get_or_create",
         "lookup",
