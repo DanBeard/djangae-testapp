@@ -162,6 +162,11 @@ indexes:
 
 - kind: djangae_gaedatastoreuser
   properties:
+  - name: __key__
+    direction: desc
+
+- kind: djangae_gaedatastoreuser
+  properties:
   - name: date_joined
   - name: email
   - name: first_name
