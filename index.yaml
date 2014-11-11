@@ -13,6 +13,12 @@ indexes:
 - kind: auth_group
   properties:
   - name: name
+  - name: __key__
+    direction: desc
+
+- kind: auth_group
+  properties:
+  - name: name
   - name: pk
     direction: desc
 
@@ -234,6 +240,12 @@ indexes:
   - name: app_label
   - name: name
 
+- kind: django_content_type
+  properties:
+  - name: name
+  - name: app_label
+  - name: model
+
 - kind: django_migrations
   properties:
   - name: app
@@ -255,6 +267,12 @@ indexes:
   - name: __key__
   - name: domain
   - name: name
+
+- kind: django_site
+  properties:
+  - name: domain
+  - name: __key__
+    direction: desc
 
 - kind: django_site
   properties:

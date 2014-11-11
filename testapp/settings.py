@@ -135,4 +135,6 @@ COMPLETE_FLUSH_WHILE_TESTING = True
 DJANGAE_SEQUENTIAL_IDS_IN_TESTS = True
 DJANGAE_SIMULATE_CONTENTTYPES = True
 
+TEST_RUNNER = 'djangae.test_runner.DjangaeTestSuiteRunner'
+
 from djangae.contrib.gauth.settings import *
