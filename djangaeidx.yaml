@@ -26,6 +26,8 @@ model_forms_post:
   posted: [day, year, month]
 or_lookups_article:
   headline: [contains, iexact, startswith, icontains]
+proxy_models_baseuser:
+  name: [icontains]
 proxy_models_bug:
   version: [icontains]
 timezones_event:
