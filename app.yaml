@@ -25,5 +25,4 @@ skip_files:
 - ^(.*/)?.*\.py[co~]
 - (.*~)
 - (\..*)
-- (app\.yaml)
 - (index\.yaml)

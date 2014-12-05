@@ -1,3 +1,4 @@
 .gaedata
 *.py[co]
 .DS_Store
+.storage*
