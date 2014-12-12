@@ -35,6 +35,7 @@ only and should not be used by developers!
 
 
 
+
 __all__ = ['Batch',
            'Batcher',
            'CompositeFilter',
@@ -897,15 +898,14 @@ class _BoundingCircleFilter(_SinglePropertyFilter):
   has to be of type V3 PointValue. V4 GeoPoints converts to this type.
   """
 
-
-
-
-
-
   def __init__(self, property_name, latitude, longitude, radius_meters):
     self._property_name = property_name
     self._lat_lng = geo_util.LatLng(latitude, longitude)
     self._radius_meters = radius_meters
+
+    if not radius_meters >= 0:
+      raise datastore_errors.BadArgumentError(
+          'invalid radius: %r' % radius_meters)
 
   @classmethod
   def _from_v4_pb(cls, bounding_circle_v4_pb):
@@ -920,13 +920,13 @@ class _BoundingCircleFilter(_SinglePropertyFilter):
   def _apply_to_value(self, value):
 
 
+
     if value[0] != entity_pb.PropertyValue.kPointValueGroup:
       return False
 
     _, latitude, longitude = value
 
     lat_lng = geo_util.LatLng(latitude, longitude)
-
 
     return self._lat_lng - lat_lng <= self._radius_meters
 
@@ -938,8 +938,6 @@ class _BoundingBoxFilter(_SinglePropertyFilter):
   bounding box region. The filter is inclusive at the border. The property
   has to be of type V3 PointValue. V4 GeoPoints converts to this type.
   """
-
-
 
   def __init__(self, property_name, southwest, northeast):
     """Initializes a _BoundingBoxFilter.
@@ -955,7 +953,6 @@ class _BoundingBoxFilter(_SinglePropertyFilter):
       datastore_errors.BadArgumentError if the south-west coordinate is on top
       of the north-east coordinate.
     """
-
 
     if southwest.lat > northeast.lat:
       raise datastore_errors.BadArgumentError(
@@ -979,12 +976,11 @@ class _BoundingBoxFilter(_SinglePropertyFilter):
   def _apply_to_value(self, value):
 
 
+
     if value[0] != entity_pb.PropertyValue.kPointValueGroup:
       return False
 
     _, latitude, longitude = value
-
-
 
     if not self._southwest.lat <= latitude <= self._northeast.lat:
       return False
@@ -1551,38 +1547,24 @@ class Cursor(_BaseComponent):
   immediately after the last result returned by a batch.
 
   A cursor should only be used on a query with an identical signature to the
-  one that produced it.
+  one that produced it or on a query with its sort order reversed.
   """
 
   @datastore_rpc._positional(1)
-  def __init__(self, _cursor_pb=None, urlsafe=None, _cursor_bytes=None):
+  def __init__(self, urlsafe=None, _cursor_bytes=None):
     """Constructor.
 
     A Cursor constructed with no arguments points the first result of any
     query. If such a Cursor is used as an end_cursor no results will ever be
     returned.
     """
-
-
     super(Cursor, self).__init__()
-    if ((urlsafe is not None) + (_cursor_pb is not None)
-        + (_cursor_bytes is not None) > 1):
-      raise datastore_errors.BadArgumentError(
-          'Can only specify one of _cursor_pb, urlsafe, and _cursor_bytes')
     if urlsafe is not None:
-      _cursor_bytes = self._urlsafe_to_bytes(urlsafe)
-    if _cursor_pb is not None:
-      if not isinstance(_cursor_pb, datastore_pb.CompiledCursor):
+      if _cursor_bytes is not None:
         raise datastore_errors.BadArgumentError(
-            '_cursor_pb argument should be datastore_pb.CompiledCursor (%r)' %
-            (_cursor_pb,))
-      _cursor_bytes = _cursor_pb.Encode()
+            'Can only specify one of urlsafe and _cursor_bytes')
+      _cursor_bytes = self._urlsafe_to_bytes(urlsafe)
     if _cursor_bytes is not None:
-      if _cursor_pb is None and urlsafe is None:
-
-
-
-        Cursor._bytes_to_cursor_pb(_cursor_bytes)
       self.__cursor_bytes = _cursor_bytes
     else:
       self.__cursor_bytes = ''
@@ -1593,16 +1575,13 @@ class Cursor(_BaseComponent):
       arg = '<%s>' % arg
     return '%s(%s)' % (self.__class__.__name__, arg)
 
-
   def reversed(self):
-    """Creates a cursor for use in a query with a reversed sort order."""
-    compiled_cursor = self._to_pb()
-    if compiled_cursor.has_position():
-      pos = compiled_cursor.position()
-      if pos.has_start_key():
-        raise datastore_errors.BadRequestError('Cursor cannot be reversed.')
-      pos.set_start_inclusive(not pos.start_inclusive())
-    return Cursor(_cursor_pb=compiled_cursor)
+    """DEPRECATED. It is no longer necessary to call reversed() on cursors.
+
+    A cursor returned by a query may also be used in a query whose sort order
+    has been reversed. This method returns a copy of the original cursor.
+    """
+    return Cursor(_cursor_bytes=self.__cursor_bytes)
 
   def to_bytes(self):
     """Serialize cursor as a byte string."""
@@ -1626,29 +1605,6 @@ class Cursor(_BaseComponent):
       serialized cursor.
     """
     return Cursor(_cursor_bytes=cursor)
-
-
-  @staticmethod
-  def _bytes_to_cursor_pb(cursor):
-
-    try:
-      cursor_pb = datastore_pb.CompiledCursor(cursor)
-    except (ValueError, TypeError), e:
-      raise datastore_errors.BadValueError(
-          'Invalid cursor (%r). Details: %s' % (cursor, e))
-    except Exception, e:
-
-
-
-
-
-
-      if e.__class__.__name__ == 'ProtocolBufferDecodeError':
-        raise datastore_errors.BadValueError(
-            'Invalid cursor %s. Details: %s' % (cursor, e))
-      else:
-        raise
-    return cursor_pb
 
   def urlsafe(self):
     """Serialize cursor as a websafe string.
@@ -1698,7 +1654,7 @@ class Cursor(_BaseComponent):
   @staticmethod
   def _from_query_result(query_result):
     if query_result.has_compiled_cursor():
-      return Cursor(_cursor_pb=query_result.compiled_cursor())
+      return Cursor(_cursor_bytes=query_result.compiled_cursor().Encode())
     return None
 
   def advance(self, offset, query, conn):
@@ -1723,11 +1679,6 @@ class Cursor(_BaseComponent):
         start_cursor=self, offset=offset, limit=0, produce_cursors=True)
     return query.run(conn, query_options).next_batch(
         Batcher.AT_LEAST_OFFSET).cursor(0)
-
-
-  def _to_pb(self):
-    """Returns the internal only pb representation."""
-    return Cursor._bytes_to_cursor_pb(self.__cursor_bytes)
 
   def __setstate__(self, state):
     if '_Cursor__compiled_cursor' in state:
@@ -1924,7 +1875,7 @@ class Query(_BaseQuery):
                                                        FilterPredicate):
       raise datastore_errors.BadArgumentError(
           'filter_predicate should be datastore_query.FilterPredicate (%r)' %
-          (ancestor,))
+          (filter_predicate,))
 
 
     if isinstance(order, CompositeOrder):
@@ -2111,12 +2062,13 @@ class Query(_BaseQuery):
 
 
     if query_options.start_cursor is not None:
-      pb.mutable_compiled_cursor().CopyFrom(query_options.start_cursor._to_pb())
+      pb.mutable_compiled_cursor().ParseFromString(
+          query_options.start_cursor.to_bytes())
 
 
     if query_options.end_cursor is not None:
-      pb.mutable_end_compiled_cursor().CopyFrom(
-          query_options.end_cursor._to_pb())
+      pb.mutable_end_compiled_cursor().ParseFromString(
+          query_options.end_cursor.to_bytes())
 
 
     if ((query_options.hint == QueryOptions.ORDER_FIRST and pb.order_size()) or
@@ -2240,6 +2192,34 @@ class _AugmentedQuery(_BaseQuery):
     self._max_filtered_count = max_filtered_count
     self._in_memory_filter = in_memory_filter
     self._in_memory_results = in_memory_results
+
+  @property
+  def app(self):
+    return self._query._key_filter.app
+
+  @property
+  def namespace(self):
+    return self._query._key_filter.namespace
+
+  @property
+  def kind(self):
+    return self._query._key_filter.kind
+
+  @property
+  def ancestor(self):
+    return self._query._key_filter.ancestor
+
+  @property
+  def filter_predicate(self):
+    return self._query._filter_predicate
+
+  @property
+  def order(self):
+    return self._query._order
+
+  @property
+  def group_by(self):
+    return self._query._group_by
 
   def run_async(self, conn, query_options=None):
     if not isinstance(conn, datastore_rpc.BaseConnection):
@@ -2584,9 +2564,9 @@ class Batch(object):
       return self.__start_cursor
     elif (index == 0 and
           self.__skipped_cursor):
-      return Cursor(_cursor_pb=self.__skipped_cursor)
+      return Cursor(_cursor_bytes=self.__skipped_cursor.Encode())
     elif index > 0 and self.__result_cursors:
-      return Cursor(_cursor_pb=self.__result_cursors[index - 1])
+      return Cursor(_cursor_bytes=self.__result_cursors[index - 1].Encode())
 
     elif index == len(self.__results):
       return self.__end_cursor

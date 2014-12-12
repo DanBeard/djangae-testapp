@@ -38,6 +38,7 @@ This module is internal and should not be used by client applications.
 
 
 
+
 from google.appengine.datastore import entity_pb
 
 from google.appengine.datastore import entity_v4_pb
@@ -443,6 +444,7 @@ class _EntityConverter(object):
       self.__v3_to_v4_user_entity(v3_property_value.uservalue(),
                                   v4_value.mutable_entity_value())
       v4_value.set_meaning(MEANING_PREDEFINED_ENTITY_USER)
+      v3_meaning = None
     else:
       pass
 
