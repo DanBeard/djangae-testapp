@@ -188,6 +188,11 @@ indexes:
 
 - kind: djangae_group
   properties:
+  - name: __key__
+    direction: desc
+
+- kind: djangae_group
+  properties:
   - name: name
   - name: permissions
 
