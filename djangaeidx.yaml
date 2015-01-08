@@ -8,6 +8,8 @@ basic_article:
   pub_date: [year, month, day, week_day]
 djangae_related:
   headline: [startswith]
+djangae_specialindexesmodel:
+  name: [contains, endswith, iexact, startswith, icontains, iendswith, istartswith]
 djangae_testuser:
   username: [iexact, contains, startswith]
 djangae_user:
