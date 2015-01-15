@@ -6,6 +6,8 @@ auth_user:
 basic_article:
   headline: [startswith]
   pub_date: [year, month, day, week_day]
+djangae_integermodel:
+  integer_field: [iexact]
 djangae_related:
   headline: [startswith]
 djangae_specialindexesmodel:
