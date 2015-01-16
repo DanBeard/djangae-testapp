@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
     'djangae.contrib.gauth',
+    'djangae.contrib.mappers',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.sites',
