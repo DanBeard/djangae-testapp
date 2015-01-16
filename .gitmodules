@@ -1,3 +1,6 @@
 [submodule "submodules/djangae"]
 	path = submodules/djangae
 	url = https://github.com/potatolondon/djangae.git
+[submodule "submodules/django"]
+	path = submodules/django
+	url = https://github.com/django/django.git
