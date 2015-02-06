@@ -42,7 +42,7 @@ import urllib
 import zlib
 
 from graphy.backends import google_chart_api
-import simplejson
+import json as simplejson
 
 from google.appengine.api import memcache
 from google.appengine.api import taskqueue

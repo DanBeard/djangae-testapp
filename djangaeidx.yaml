@@ -36,5 +36,11 @@ proxy_models_baseuser:
   name: [icontains]
 proxy_models_bug:
   version: [icontains]
+tests_related:
+  headline: [startswith]
+tests_specialindexesmodel:
+  name: [contains, endswith, iexact, startswith, icontains]
+tests_testuser:
+  username: [iexact, startswith]
 timezones_event:
   dt: [year, month]

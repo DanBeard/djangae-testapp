@@ -289,3 +289,8 @@ indexes:
   - name: domain
   - name: pk
     direction: desc
+
+- kind: uniquetool_uniqueaction
+  properties:
+  - name: __key__
+    direction: desc

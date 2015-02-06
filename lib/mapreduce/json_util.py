@@ -3,7 +3,7 @@
 import copy
 import datetime
 import logging
-import simplejson
+import json as simplejson
 
 from google.appengine.api import datastore_errors
 from google.appengine.api import datastore_types
@@ -200,7 +200,7 @@ class JsonProperty(db.UnindexedProperty):
     """
     if value is not None and not isinstance(value, self.data_type):
       raise datastore_errors.BadValueError(
-          "Property %s must be convertible to a %s instance (%s)" % 
+          "Property %s must be convertible to a %s instance (%s)" %
           (self.name, self.data_type, value))
     return super(JsonProperty, self).validate(value)
 

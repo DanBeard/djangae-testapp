@@ -25,6 +25,9 @@ handlers:
   static_dir: static/admin
   expiration: '0'
 
+- url: /_ah/(mapreduce|queue|warmup).*
+  script: testapp.wsgi.application
+
 - url: /.*
   script: testapp.wsgi.application
 

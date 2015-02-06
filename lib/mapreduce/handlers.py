@@ -29,7 +29,7 @@ import random
 import sys
 import time
 import traceback
-import simplejson
+import json as simplejson
 
 from google.appengine.ext import ndb
 

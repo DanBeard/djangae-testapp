@@ -28,7 +28,7 @@ import logging
 import os
 
 # Relative imports
-import simplejson
+import json as simplejson
 
 # pylint: disable=protected-access
 

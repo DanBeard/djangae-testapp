@@ -48,8 +48,8 @@ from google.appengine.ext import webapp
 
 # Relative imports
 import models
-import simplejson
-import status_ui
+import json as simplejson
+from . import status_ui
 import util as mr_util
 
 # pylint: disable=g-bad-name

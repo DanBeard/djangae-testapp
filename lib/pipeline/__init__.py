@@ -23,7 +23,7 @@ def _fix_path():
   """Finds the google_appengine directory and fixes Python imports to use it."""
   import os
   import sys
-  all_paths = os.environ.get('PYTHONPATH').split(os.pathsep)
+  all_paths = os.environ.get('PYTHONPATH', '').split(os.pathsep)
   for path_dir in all_paths:
     dev_appserver_path = os.path.join(path_dir, 'dev_appserver.py')
     if os.path.exists(dev_appserver_path):
