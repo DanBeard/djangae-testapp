@@ -4,4 +4,6 @@
 [submodule "submodules/django"]
 	path = submodules/django
 	url = https://github.com/django/django.git
-        branch = stable/1.6.x
+        branch = stable/1.7.x
+[submodule "django"]
+	branch = stable/1.7.x
